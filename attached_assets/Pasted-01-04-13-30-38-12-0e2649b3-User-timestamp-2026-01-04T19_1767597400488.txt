@@ -1,0 +1,90 @@
+01-04 13:30:38.12
+0e2649b3
+User
+{"timestamp":"2026-01-04T19:30:38.128Z","level":"error","message":"Request error","path":"/estimate/tuckpointing","method":"GET","statusCode":500,"error":"Cannot read properties of undefined (reading 'replace')"}
+2026-01-04 13:30:38.62
+0e2649b3
+User
+{"timestamp":"2026-01-04T19:30:38.622Z","level":"error","message":"Request error","path":"/estimate/chimney-repair","method":"GET","statusCode":500,"error":"Cannot read properties of undefined (reading 'replace')"}
+2026-01-04 13:30:39.08
+0e2649b3
+User
+{"timestamp":"2026-01-04T19:30:39.085Z","level":"error","message":"Request error","path":"/estimate/retaining-wall","method":"GET","statusCode":500,"error":"Cannot read properties of undefined (reading 'replace')"}
+2026-01-04 13:30:39.43
+0e2649b3
+User
+{"timestamp":"2026-01-04T19:30:39.433Z","level":"error","message":"Request error","path":"/estimate/concrete-flatwork","method":"GET","statusCode":500,"error":"Cannot read properties of undefined (reading 'replace')"}
+2026-01-04 16:00:24.87
+8cf0558d
+System
+starting up user application
+2026-01-04 16:00:24.87
+8cf0558d
+System
+metasidecar: loaded enterprise status from environment is_enterprise=false
+2026-01-04 16:00:24.87
+8cf0558d
+System
+forwarding local port 5000 to external port 80 (mapped as 1104)
+2026-01-04 16:00:28.80
+8cf0558d
+User
+{"timestamp":"2026-01-04T22:00:28.793Z","level":"info","message":"Database connected successfully"}
+2026-01-04 16:00:28.81
+8cf0558d
+User
+{"timestamp":"2026-01-04T22:00:28.810Z","level":"info","message":"Server started","port":5000,"appUrl":"https://probidcore.net"}
+2026-01-04 16:00:28.84
+8cf0558d
+User
+{"timestamp":"2026-01-04T22:00:28.843Z","level":"info","message":"SEO pages already seeded","existingCount":96}
+2026-01-04 16:05:09.00
+0e2649b3
+System
+system: received signal terminated
+2026-01-04 16:05:09.01
+0e2649b3
+System
+command finished with error [node --enable-source-maps --import tsx server.ts]: signal: terminated
+2026-01-04 16:05:09.01
+0e2649b3
+System
+main done, exiting
+2026-01-04 23:42:51.20
+9cf31ad8
+System
+starting up user application
+2026-01-04 23:42:51.20
+9cf31ad8
+System
+metasidecar: loaded enterprise status from environment is_enterprise=false
+2026-01-04 23:42:51.20
+9cf31ad8
+System
+forwarding local port 5000 to external port 80 (mapped as 1104)
+2026-01-04 23:42:54.61
+9cf31ad8
+User
+{"timestamp":"2026-01-05T05:42:54.594Z","level":"info","message":"Database connected successfully"}
+2026-01-04 23:42:54.61
+9cf31ad8
+User
+{"timestamp":"2026-01-05T05:42:54.615Z","level":"info","message":"Server started","port":5000,"appUrl":"https://probidcore.net"}
+2026-01-04 23:42:54.66
+9cf31ad8
+User
+{"timestamp":"2026-01-05T05:42:54.662Z","level":"info","message":"SEO pages already seeded","existingCount":96}
+2026-01-04 23:46:46.90
+8cf0558d
+System
+system: received signal terminated
+2026-01-04 23:46:46.92
+8cf0558d
+System
+command finished with error [node --enable-source-maps --import tsx server.ts]: signal: terminated
+2026-01-04 23:46:46.94
+8cf0558d
+System
+main done, exiting
+Wrap
+Colors

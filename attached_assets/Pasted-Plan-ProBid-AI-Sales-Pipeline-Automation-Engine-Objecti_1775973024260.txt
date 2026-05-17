@@ -1,0 +1,166 @@
+Plan: ProBid AI Sales Pipeline + Automation Engine
+
+Objective:
+Build a contractor-focused sales pipeline and behavior-triggered automation engine that increases activation, estimate completion, estimate sending, subscription retention, and customer lifetime value.
+
+Pipeline model:
+Lead → Signed Up → First Estimate Created → Estimate Sent → Won Job → Repeat Customer
+
+Tasks
+
+T001: Database Schema — Pipeline, Events, Automation
+Blocked By: []
+Details:
+Add to shared/schema.ts:
+- pipeline_stages
+- pipeline_deals
+- pipeline_activities
+- automation_rules
+- automation_runs
+- automation_events (or equivalent event log)
+
+Requirements:
+- proper relations to users and estimates
+- timestamps on all tables
+- support JSON conditions/actions for rules
+- support status/error logging for runs
+- include cooldown/idempotency support
+
+Acceptance:
+Tables defined with correct types, indexes, and relations.
+
+T002: Event System Foundation
+Blocked By: [T001]
+Details:
+Create a central event emitter/logging layer for:
+- user_signed_up
+- estimate_created
+- estimate_sent
+- deal_stage_changed
+- user_inactive
+- trial_ending
+- subscription_upgraded
+- subscription_cancelled
+
+Acceptance:
+App can emit and persist events consistently from server code paths.
+
+T003: Sales Pipeline API Routes
+Blocked By: [T001]
+Details:
+Create server/routes/pipeline.ts with:
+- CRUD for stages, deals, activities
+- deal movement between stages
+- stage history/activity logging
+- pipeline analytics endpoints:
+  - counts by stage
+  - conversion rates
+  - average time in stage
+  - estimated value totals
+
+Register routes in server.ts
+
+Acceptance:
+Pipeline API is fully functional and typed.
+
+T004: Automation Engine Core
+Blocked By: [T001, T002]
+Details:
+Create server/lib/automation-engine.ts with:
+- event processing
+- rule evaluation
+- condition matching
+- action execution
+- run logging
+- cooldown/idempotency protection
+
+Supported triggers:
+- signup_no_estimate
+- estimate_created
+- estimate_sent
+- trial_ending
+- deal_stage_changed
+- user_inactive
+- subscription_upgraded
+- subscription_cancelled
+
+Supported actions:
+- send_email
+- move_deal_stage
+- create_activity
+- send_notification
+
+Seed default rules for contractor workflow.
+
+Acceptance:
+Engine processes rules safely and logs success/failure.
+
+T005: Automation Scheduler Integration
+Blocked By: [T004]
+Details:
+Update server/jobs/scheduler.ts to:
+- process queued events
+- process time-based triggers
+- retry failed runs safely
+- avoid duplicate execution
+
+Acceptance:
+Scheduler runs automations reliably without double-firing.
+
+T006: Wire Existing App Events
+Blocked By: [T002, T004]
+Details:
+Integrate event emission into existing code paths:
+- signup
+- estimate creation
+- estimate send
+- trial/subscription lifecycle
+- inactivity tracking
+
+Acceptance:
+Real user behavior triggers pipeline and automation events.
+
+T007: Frontend — Pipeline Dashboard
+Blocked By: [T003]
+Details:
+Create a pipeline dashboard page with:
+- Kanban board
+- drag/drop stage movement
+- deal detail drawer
+- activity timeline
+- summary metrics
+- conversion analytics
+
+Acceptance:
+Usable contractor-focused pipeline UI exists.
+
+T008: Frontend — Automation Manager
+Blocked By: [T004]
+Details:
+Create automation manager page with:
+- rules list
+- enable/disable toggle
+- rule editor
+- trigger/condition/action configuration
+- run history
+- failed run visibility
+- test rule action
+
+Acceptance:
+Admin can manage automations from UI.
+
+T009: Navigation + Access Control
+Blocked By: [T007, T008]
+Details:
+Add nav entries and protect admin-only areas.
+
+Acceptance:
+Pages are accessible to correct users only.
+
+T010: Update replit.md
+Blocked By: [T009]
+Details:
+Document schema, routes, events, scheduler behavior, seeded rules, and admin workflows.
+
+Acceptance:
+replit.md reflects the final architecture and usage.

@@ -1,0 +1,124 @@
+import json
+import datetime
+
+# ------------------------------
+# 1. Basic Data Structures
+# ------------------------------
+
+users = []
+email_templates = {
+    "welcome": "Welcome to ProBidCore – your first estimate is minutes away!",
+    "social_proof": "How contractors save 4+ hours/week with ProBidCore...",
+    "feature_tease": "Unlock unlimited estimates, branding, and more!",
+    "urgency": "Your free plan is limited – upgrade before it resets!",
+    "referral": "Earn 20% by referring contractors to ProBidCore!"
+}
+
+launch_checklist = [
+    {"task": "Post in contractor Facebook & Reddit groups", "done": False},
+    {"task": "Launch onboarding email automation", "done": False},
+    {"task": "Run $150 Google Ads test", "done": False},
+    {"task": "Add demo video to homepage", "done": False},
+    {"task": "Reach $500 MRR milestone", "done": False}
+]
+
+# ------------------------------
+# 2. User Management
+# ------------------------------
+
+def add_user(name, tier="free"):
+    users.append({
+        "name": name,
+        "tier": tier,
+        "signup_date": datetime.datetime.now(),
+        "active": True
+    })
+
+def upgrade_user(name, new_tier):
+    for user in users:
+        if user["name"] == name:
+            user["tier"] = new_tier
+            print(f"{name} upgraded to {new_tier}")
+            return
+    print("User not found.")
+
+def churn_user(name):
+    for user in users:
+        if user["name"] == name:
+            user["active"] = False
+            print(f"{name} has churned.")
+            return
+    print("User not found.")
+
+# ------------------------------
+# 3. MRR & Metrics
+# ------------------------------
+
+tier_prices = {
+    "free": 0,
+    "pro": 25,
+    "business": 55
+}
+
+def calculate_mrr():
+    mrr = sum(tier_prices[u["tier"]] for u in users if u["active"])
+    print(f"📊 Current MRR: ${mrr}")
+    return mrr
+
+def show_user_summary():
+    print("👥 User Breakdown:")
+    summary = {"free": 0, "pro": 0, "business": 0}
+    for u in users:
+        if u["active"]:
+            summary[u["tier"]] += 1
+    for tier, count in summary.items():
+        print(f"{tier.capitalize()}: {count}")
+
+# ------------------------------
+# 4. Email Triggers
+# ------------------------------
+
+def send_email(name, template_key):
+    for user in users:
+        if user["name"] == name:
+            print(f"\n📧 Sending '{template_key}' email to {name}:")
+            print(email_templates[template_key])
+            return
+    print("User not found.")
+
+# ------------------------------
+# 5. Launch Checklist
+# ------------------------------
+
+def show_checklist():
+    print("\n🚀 Launch Checklist:")
+    for i, item in enumerate(launch_checklist):
+        status = "✅" if item["done"] else "❌"
+        print(f"{i+1}. {status} {item['task']}")
+
+def complete_task(index):
+    if 0 <= index < len(launch_checklist):
+        launch_checklist[index]["done"] = True
+        print(f"✔ Task {index+1} marked complete.")
+    else:
+        print("Invalid task index.")
+
+# ------------------------------
+# 6. Example Menu (Optional)
+# ------------------------------
+
+def main():
+    print("📦 ProBidCore Agent Running")
+    print("----------------------------")
+    add_user("Jesse", "free")
+    add_user("Maria", "pro")
+    add_user("Sam", "business")
+    show_user_summary()
+    calculate_mrr()
+    send_email("Jesse", "welcome")
+    show_checklist()
+    complete_task(0)
+    show_checklist()
+
+if __name__ == "__main__":
+    main()

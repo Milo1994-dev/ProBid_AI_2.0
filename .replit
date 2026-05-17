@@ -1,0 +1,65 @@
+modules = ["python-3.11", "nodejs-20", "postgresql-16"]
+[agent]
+expertMode = true
+integrations = ["javascript_openai_ai_integrations:2.0.0", "resend:1.0.0", "javascript_database:1.0.0", "github:1.0.0"]
+
+[nix]
+channel = "stable-25_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ProBid Core"
+
+[[workflows.workflow]]
+name = "ProBid Core"
+author = "agent"
+mode = "parallel"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ProBid Core"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["node", "--enable-source-maps", "dist/server.js"]
+build = ["bash", "scripts/deploy-build.sh"]
+
+[userenv]
+
+[userenv.shared]
+APP_URL = "https://e4e7fe7b-1e11-42c2-8c0f-f662ac9023cc-00-275eb84s84qee.picard.replit.dev"
+PORT = "5000"
+STRIPE_PRICE_BUSINESS_MONTHLY = "price_1SNqfIHHUrCDfRAxI4aD9OIo"
+STRIPE_PRICE_PRO_MONTHLY = "price_1THmxQHHUrCDfRAxPTeep1NJ"
+
+[userenv.development]
+
+[userenv.production]
+
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 180000
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
+localPort = 5099
+externalPort = 3000
+
+[[ports]]
+localPort = 23636
+externalPort = 80

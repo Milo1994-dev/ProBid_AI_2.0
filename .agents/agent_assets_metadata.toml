@@ -1,0 +1,409 @@
+uploads = []
+
+[[generated]]
+id = "UqW9GzCC7mLqniN9DAjmn"
+uri = "file://client/public/icon-512.png"
+type = "image"
+title = "probid app icon"
+
+[[generated]]
+id = "QiKYASpGP9In8YOXrM6Ds"
+uri = "file://attached_assets/generated_images/kirchner_masonry_logo.png"
+type = "image"
+title = "Kirchner Masonry logo emblem"
+
+[[generated]]
+id = "drbEOF6nMkTnfyDKq94mb"
+uri = "file://attached_assets/generated_images/kirchner_masonry_logo_v2.png"
+type = "image"
+title = "Kirchner Masonry crest logo"
+
+[[generated]]
+id = "dliGsbUxp4A5jAQGdIF6P"
+uri = "file://attached_assets/generated_images/kirchner_masonry_full_v1.png"
+type = "image"
+title = "Kirchner Masonry full details horizontal"
+
+[[generated]]
+id = "8BKMlw0QAJwFZA47xo-qz"
+uri = "file://attached_assets/generated_images/kirchner_masonry_full_v2.png"
+type = "image"
+title = "Kirchner Masonry full details vertical"
+
+[[generated]]
+id = "AC6DJNC800XpwDu4jDocg"
+uri = "file://attached_assets/generated_images/kirchner_masonry_full_v3.png"
+type = "image"
+title = "Kirchner Masonry badge seal style"
+
+[[generated]]
+id = "PivKMkoYWMQZn7VGG9gZi"
+uri = "file://attached_assets/generated_images/kirchner_masonry_dark_gold.png"
+type = "image"
+title = "Dark gold premium masonry logo"
+
+[[generated]]
+id = "Vj0TmtuB1u8bgHX_pMpsg"
+uri = "file://attached_assets/generated_images/kirchner_masonry_vintage.png"
+type = "image"
+title = "Vintage engraving masonry logo"
+
+[[generated]]
+id = "WHmKdwIZq-FToMgdG8Xeh"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern.png"
+type = "image"
+title = "Modern minimalist masonry logo"
+
+[[generated]]
+id = "opX3JuHQJFvPfUFn8Axgg"
+uri = "file://attached_assets/generated_images/kirchner_masonry_truck_decal.png"
+type = "image"
+title = "Truck door decal masonry logo"
+
+[[generated]]
+id = "aV6kWwjRhjphuyD48t-JH"
+uri = "file://attached_assets/generated_images/kirchner_masonry_business_card.png"
+type = "image"
+title = "Business card masonry logo"
+
+[[generated]]
+id = "FIeKzIEN6sAArLXZM3CRZ"
+uri = "file://attached_assets/generated_images/kirchner_masonry_patriotic.png"
+type = "image"
+title = "Patriotic American masonry logo"
+
+[[generated]]
+id = "IbJfy07YjLJvL88wf3doT"
+uri = "file://attached_assets/generated_images/kirchner_masonry_stone_carved.png"
+type = "image"
+title = "Carved stone plaque masonry logo"
+
+[[generated]]
+id = "K0d9wajnHz0XcXie3HtEO"
+uri = "file://attached_assets/generated_images/kirchner_masonry_woodburn.png"
+type = "image"
+title = "Wood burned rustic masonry logo"
+
+[[generated]]
+id = "h8f9XTQcYxWmlOBujROPu"
+uri = "file://attached_assets/generated_images/kirchner_masonry_blueprint.png"
+type = "image"
+title = "Blueprint style masonry logo"
+
+[[generated]]
+id = "C9fTOVecgtOqzr4ZTdOyP"
+uri = "file://attached_assets/generated_images/kirchner_masonry_bw_embroidery.png"
+type = "image"
+title = "Black white embroidery masonry logo"
+
+[[generated]]
+id = "S2nMvBcydruw_BSNaOTjr"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern1.png"
+type = "image"
+title = "Ultra modern minimalist masonry logo"
+
+[[generated]]
+id = "zd8bIY9dj6NFW_EmUyHpE"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern2.png"
+type = "image"
+title = "Dark luxury modern masonry logo"
+
+[[generated]]
+id = "TUKElFfT07sR19fGXFoEt"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern3.png"
+type = "image"
+title = "Contemporary geometric masonry logo"
+
+[[generated]]
+id = "DNBobIhz7MTSuOkJQJJdK"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern4.png"
+type = "image"
+title = "Futuristic gradient masonry logo"
+
+[[generated]]
+id = "naFpZI8ExtCJKhjWJR6HB"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern5.png"
+type = "image"
+title = "Split color modern masonry logo"
+
+[[generated]]
+id = "Tx2E8MvDTyRuaDGPnuZiq"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v2.png"
+type = "image"
+title = "Split color circle variation"
+
+[[generated]]
+id = "nzHRbHceb306dZ-0queaM"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v3.png"
+type = "image"
+title = "Diagonal split diamond variation"
+
+[[generated]]
+id = "76BKxa03Cjz9zmbKWzqoG"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v4.png"
+type = "image"
+title = "Asymmetric panel split logo"
+
+[[generated]]
+id = "x7tORA4Yr7PBIVldzxcCN"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v5.png"
+type = "image"
+title = "Framed octagon modern logo"
+
+[[generated]]
+id = "Wo2PQOOzh18b0iwXC2YxM"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v6.png"
+type = "image"
+title = "Bold warm split hexagon logo"
+
+[[outputs]]
+id = "8qfxYuO1iAG8O7QCzK1iA"
+uri = "file://client/public/icon-512.png"
+type = "image"
+title = "ProBid App Icon (512px)"
+
+[[outputs]]
+id = "9YU8FDiJrXfolG3PXttaZ"
+uri = "file://screenshots/probid-homepage.jpg"
+type = "image"
+title = "ProBid Homepage"
+
+[[outputs]]
+id = "QHn3sAFKjWIJg88jAJBts"
+uri = "file://screenshots/probid-dashboard.jpg"
+type = "image"
+title = "ProBid Login Page"
+
+[[outputs]]
+id = "PgjJb1kREEvCj_TAVChhU"
+uri = "file://.local/seo-audit-report.md"
+type = "text"
+title = "ProBid AI SEO Audit Report"
+
+[[outputs]]
+id = "XzV95gWHSoSKZV_dF0AFU"
+uri = "file://documents/ProBid_AI_Growth_Blueprint.md"
+type = "text"
+title = "ProBid AI — Growth Blueprint (Roadmap to 1,000 Subscribers)"
+
+[[outputs]]
+id = "wtJ8ArF3DzK4nn5RRvDPw"
+uri = "file://documents/ProBid_AI_NDA_Equity_Agreement.md"
+type = "text"
+title = "NDA & Performance-Based Equity Agreement"
+
+[[outputs]]
+id = "9S_w9mutOafoNXIjOONmI"
+uri = "file://attached_assets/generated_images/kirchner_masonry_logo.png"
+type = "image"
+title = "Kirchner Masonry Logo - Option 1 (Horizontal)"
+
+[[outputs]]
+id = "OBqSJ4E5yB7qd6pAMxddU"
+uri = "file://attached_assets/generated_images/kirchner_masonry_logo_v2.png"
+type = "image"
+title = "Kirchner Masonry Logo - Option 2 (Shield Crest)"
+
+[[outputs]]
+id = "eweE01i1x0wYPV_miWPql"
+uri = "file://attached_assets/generated_images/kirchner_masonry_full_v1.png"
+type = "image"
+title = "Option 1 - Horizontal Banner"
+
+[[outputs]]
+id = "a8QkHeR3lU9yjaA7ZN8SY"
+uri = "file://attached_assets/generated_images/kirchner_masonry_full_v2.png"
+type = "image"
+title = "Option 2 - Vertical Shield"
+
+[[outputs]]
+id = "ksaocfliP7wtYb2uWPP-O"
+uri = "file://attached_assets/generated_images/kirchner_masonry_full_v3.png"
+type = "image"
+title = "Option 3 - Badge/Seal Emblem"
+
+[[outputs]]
+id = "07uDwQA8PfeGHRGaF_-s8"
+uri = "file://attached_assets/generated_images/kirchner_masonry_dark_gold.png"
+type = "image"
+title = "Option 4 - Dark & Gold Premium"
+
+[[outputs]]
+id = "Yc0clfG1nRGiBf-eSDb7a"
+uri = "file://attached_assets/generated_images/kirchner_masonry_vintage.png"
+type = "image"
+title = "Option 5 - Vintage Old World"
+
+[[outputs]]
+id = "XUXjW6QKGOc2_dI72g1Zu"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern.png"
+type = "image"
+title = "Option 6 - Modern Clean"
+
+[[outputs]]
+id = "28PGFkCxXkbcHnkGYsZtw"
+uri = "file://attached_assets/generated_images/kirchner_masonry_truck_decal.png"
+type = "image"
+title = "Option 7 - Truck Door Decal"
+
+[[outputs]]
+id = "iYg9EjS6EaI4dm5z650wP"
+uri = "file://attached_assets/generated_images/kirchner_masonry_business_card.png"
+type = "image"
+title = "Option 8 - Business Card Layout"
+
+[[outputs]]
+id = "KIhs0Wt61HjhTrEYG1rKd"
+uri = "file://attached_assets/generated_images/kirchner_masonry_patriotic.png"
+type = "image"
+title = "Option 9 - Patriotic Shield"
+
+[[outputs]]
+id = "rQ4HnHq12qqLqrXsF0rjP"
+uri = "file://attached_assets/generated_images/kirchner_masonry_stone_carved.png"
+type = "image"
+title = "Option 10 - Carved Stone Plaque"
+
+[[outputs]]
+id = "iZvLDsBscNhokYN2lHUP4"
+uri = "file://attached_assets/generated_images/kirchner_masonry_woodburn.png"
+type = "image"
+title = "Option 11 - Wood Burned Rustic"
+
+[[outputs]]
+id = "BTnFOQ9BrhVVu41Dc3_WZ"
+uri = "file://attached_assets/generated_images/kirchner_masonry_blueprint.png"
+type = "image"
+title = "Option 12 - Blueprint"
+
+[[outputs]]
+id = "O76snqjp5x__smvMNtCkv"
+uri = "file://attached_assets/generated_images/kirchner_masonry_bw_embroidery.png"
+type = "image"
+title = "Option 13 - Black & White Embroidery"
+
+[[outputs]]
+id = "ENPFIknlFam7kU8aXzli6"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern1.png"
+type = "image"
+title = "Option 14 - Brick K Monogram"
+
+[[outputs]]
+id = "wd8yo0uXRFVRPwZzME8s-"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern2.png"
+type = "image"
+title = "Option 15 - Dark Luxury"
+
+[[outputs]]
+id = "LOS9kz3ie4B376m-V_zlq"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern3.png"
+type = "image"
+title = "Option 16 - Geometric Trowel"
+
+[[outputs]]
+id = "mdLcRXbWOpYjDhMA93_7G"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern4.png"
+type = "image"
+title = "Option 17 - Futuristic Glow"
+
+[[outputs]]
+id = "wIvFofTnG5NFbgG6Gd7L2"
+uri = "file://attached_assets/generated_images/kirchner_masonry_modern5.png"
+type = "image"
+title = "Option 18 - Split Color Hexagon"
+
+[[outputs]]
+id = "7dzLYPkkg9cCV6U9p7y-q"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v2.png"
+type = "image"
+title = "V2 - Circle Icon with Brick Texture"
+
+[[outputs]]
+id = "Vk4GhEtkom0OGq-H0OPsT"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v3.png"
+type = "image"
+title = "V3 - Diagonal Split Diamond"
+
+[[outputs]]
+id = "eYQTky77t-8nhDeBsu0y_"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v4.png"
+type = "image"
+title = "V4 - Asymmetric Panel Hexagon"
+
+[[outputs]]
+id = "FuN6pVuq5vPyBKsTZuH8_"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v5.png"
+type = "image"
+title = "V5 - Framed Octagon"
+
+[[outputs]]
+id = "AO4wbbsXtCM03xBLN3dFA"
+uri = "file://attached_assets/generated_images/kirchner_masonry_split_v6.png"
+type = "image"
+title = "V6 - Warm Split Big Hexagon"
+
+[[outputs]]
+id = "vGAkfBtqMi_sCWuk_kcmA"
+uri = "file://ProBid_AI_Marketing_Partner_Plan.md"
+type = "text"
+title = "ProBid AI Marketing Partner Plan"
+
+[[outputs]]
+id = "uHUoWKeSHo9-m-APxY0SF"
+uri = "file://ProBid_AI_Revenue_Projections.md"
+type = "text"
+title = "ProBid AI — 5-Year Revenue & Earnings Projections"
+
+[[outputs]]
+id = "qLbMLXQhNPy1vMuFTilTE"
+uri = "file://ProBid_AI_30_Percent_Split.md"
+type = "text"
+title = "ProBid AI — 70/30 Revenue Split (5-Year Projections)"
+
+[[outputs]]
+id = "8EItlkE22iBEBMEyqR96c"
+uri = "file://ProBid_AI_Final_Split.md"
+type = "text"
+title = "ProBid AI — 60/35/5 Split with Equity Bonus (Final Plan)"
+
+[[outputs]]
+id = "i-sajKd04RTycpvaQc7rt"
+uri = "file://documents/ProBid_AI_Partnership_Proposal.md"
+type = "text"
+title = "ProBid AI — Growth Partner Proposal (Final)"
+
+[[outputs]]
+id = "Iiistimg7jI3nv-dhcaE3"
+uri = "file://screenshots/demo_phase2_scanning.jpg"
+type = "image"
+title = "Beat 1 — AI scanning the roof photo"
+
+[[outputs]]
+id = "CzNu_FJM8tTpIm425fspK"
+uri = "file://screenshots/demo_phase3_typing.jpg"
+type = "image"
+title = "Beat 2 — Line items typing in one by one"
+
+[[outputs]]
+id = "gP8XLfQLISOMzqSr1qiT4"
+uri = "file://screenshots/demo_phase4_total.jpg"
+type = "image"
+title = "Beat 3 — Subtotals + Total Estimate snap in"
+
+[[outputs]]
+id = "QGUp-wXeClVCw4v6iWoDT"
+uri = "file://screenshots/demo_phase5_done.jpg"
+type = "image"
+title = "Beat 4 — Generated in 22 seconds stamp"
+
+[[outputs]]
+id = "Zw24kPUFlVbHxplT171OZ"
+uri = "file://ProBid_AI_Overview.md"
+type = "text"
+title = "ProBid AI — Full Overview (for Evaluation & Valuation)"
+
+[[outputs]]
+id = "fmPDG9hOFKS3Z6Y7RFMqa"
+uri = "file://docs/legal/trade-secrets/ai-estimating-logic.md"
+type = "text"
+title = "ai-estimating-logic.md (drop into ProBidCore Repl)"

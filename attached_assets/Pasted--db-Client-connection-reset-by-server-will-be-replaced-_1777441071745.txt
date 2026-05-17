@@ -1,0 +1,78 @@
+[db] Client connection reset by server — will be replaced by pool.
+2026-04-29 00:15:47.21
+3de83318
+User
+[db] Idle connection terminated by server — pool will reconnect automatically.
+2026-04-29 00:19:27.01
+3de83318
+User
+{"timestamp":"2026-04-29T05:19:27.012Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":4,"cooldownMs":86400000,"elapsed":26194217}
+2026-04-29 00:19:27.81
+3de83318
+User
+{"timestamp":"2026-04-29T05:19:27.812Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":12,"cooldownMs":86400000,"elapsed":26188617}
+2026-04-29 00:19:27.81
+3de83318
+User
+{"timestamp":"2026-04-29T05:19:27.812Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":11,"cooldownMs":86400000,"elapsed":26191317}
+2026-04-29 00:19:28.41
+3de83318
+User
+{"timestamp":"2026-04-29T05:19:28.412Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":11,"cooldownMs":86400000,"elapsed":26191917}
+2026-04-29 00:19:28.41
+3de83318
+User
+{"timestamp":"2026-04-29T05:19:28.412Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":12,"cooldownMs":86400000,"elapsed":26189217}
+2026-04-29 00:25:46.53
+3de83318
+User
+[db] Client connection reset by server — will be replaced by pool.
+2026-04-29 00:25:46.53
+3de83318
+User
+[db] Idle connection terminated by server — pool will reconnect automatically.
+2026-04-29 00:28:46.79
+3de83318
+User
+[db] Client connection reset by server — will be replaced by pool.
+2026-04-29 00:28:46.79
+3de83318
+User
+[db] Idle connection terminated by server — pool will reconnect automatically.
+2026-04-29 00:29:26.51
+3de83318
+User
+{"timestamp":"2026-04-29T05:29:26.511Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":4,"cooldownMs":86400000,"elapsed":26793716}
+2026-04-29 00:29:26.91
+3de83318
+User
+{"timestamp":"2026-04-29T05:29:26.912Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":11,"cooldownMs":86400000,"elapsed":26790417}
+2026-04-29 00:29:26.91
+3de83318
+User
+{"timestamp":"2026-04-29T05:29:26.912Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":12,"cooldownMs":86400000,"elapsed":26787717}
+2026-04-29 00:29:28.11
+3de83318
+User
+{"timestamp":"2026-04-29T05:29:28.112Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":12,"cooldownMs":86400000,"elapsed":26788917}
+
+2026-04-29 00:29:28.11
+3de83318
+User
+{"timestamp":"2026-04-29T05:29:28.111Z","level":"info","message":"Automation rule skipped (cooldown)","ruleId":11,"cooldownMs":86400000,"elapsed":26791616}
+2026-04-29 00:31:02.01
+3de83318
+User
+[db] Idle connection terminated by server — pool will reconnect automatically.
+2026-04-29 00:31:02.01
+3de83318
+User
+[db] Client connection reset by server — will be replaced by pool.
+2026-04-29 00:33:47.01
+3de83318
+User
+[db] Client connection reset by server — will be replaced by pool.
+2026-04-29 00:33:47.01
+3de83318
+User
+[db] Idle connection terminated by server — pool will reconnect automatically.

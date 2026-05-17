@@ -1,0 +1,167 @@
+ProBid AI
+Instantly Generate Construction Estimates That Win Jobs
+Stop guessing. Stop underbidding.
+ProBid AI uses advanced AI to instantly calculate labor, materials, and cost estimates from photos or job details — so you can quote faster and close more jobs.
+👉 Built for contractors
+👉 Designed for real-world pricing
+👉 Works in seconds
+[ Start Free ]
+[ View Pricing ]
+TRUST BAR
+✔ Used by contractors
+✔ AI-powered cost analysis
+✔ Built by industry professionals
+✔ No credit card required to try
+🧠 WHAT PROBID AI DOES
+ProBid AI helps contractors:
+✅ Generate instant job estimates
+✅ Analyze photos and descriptions
+✅ Calculate labor + materials
+✅ Avoid underbidding
+✅ Send professional estimates
+✅ Close more jobs faster
+No spreadsheets.
+No guessing.
+No wasted hours.
+⚙️ HOW IT WORKS
+1️⃣ Describe the Job or Upload a Photo
+Blueprint, phone photo, or written scope — all work.
+2️⃣ AI Analyzes the Project
+ProBid AI calculates:
+Labor time
+Material cost
+Complexity
+Regional pricing
+3️⃣ Get an Instant Estimate
+Use it internally or send to a client.
+🧱 WHO IT’S FOR
+✔ Contractors
+✔ Builders
+✔ Masonry & Concrete
+✔ Remodelers
+✔ Property Investors
+✔ Handymen
+If you price jobs — this saves you time and money.
+⭐ WHY PROBID AI WINS
+✔ Built by contractors
+✔ Designed for real jobs
+✔ Not generic AI
+✔ Fast & accurate
+✔ Constantly improving
+🚀 CALL TO ACTION
+Start Free — Get 2 Estimates Today
+No credit card required.
+[ Start Free ]
+💳 PART 2: PRICING PAGE (OPTIMIZED TO CONVERT)
+🆓 Free Plan – $0
+✔ 2 estimates per day
+✔ Basic cost breakdown
+✔ Manual input
+✔ No credit card
+Best for trying it out.
+🔧 Pro Plan – $29/month ⭐ MOST POPULAR
+✔ Unlimited estimates
+✔ Photo uploads
+✔ Material + labor breakdown
+✔ Saved history
+✔ Priority processing
+Perfect for contractors & remodelers.
+🏗️ Contractor+ – $79/month
+✔ Everything in Pro
+✔ Advanced pricing logic
+✔ Regional cost adjustment
+✔ PDF exports
+✔ Priority AI access
+✔ Early feature access
+Built for high-volume pros.
+🏆 Founding Member – $149 (Lifetime)
+✔ Lifetime access
+✔ All future features
+✔ Founder badge
+✔ Locked pricing forever
+⚠️ Limited-time launch offer
+🧭 PART 3: USER ONBOARDING FLOW
+Step 1 – Signup
+Email → Password → Create Account
+Step 2 – Choose Plan
+Free / Pro / Contractor+
+Step 3 – First Estimate
+Prompt:
+“Describe your job or upload a photo.”
+Step 4 – Results Page
+Shows:
+Estimated cost
+Labor hours
+Materials
+Suggested price range
+Step 5 – Upgrade Prompt
+“Unlock unlimited estimates & exports”
+💳 PART 4: STRIPE SETUP (REPLIT-READY)
+Products to Create in Stripe:
+Name
+Price
+Billing
+Pro Plan
+$29
+Monthly
+Contractor+
+$79
+Monthly
+Founding Member
+$149
+One-time
+Stripe Settings:
+✔ Enable customer portal
+✔ Enable invoices
+✔ Enable webhook events:
+checkout.session.completed
+invoice.payment_succeeded
+customer.subscription.updated
+Example Stripe Flow (Backend Logic)
+Copy code
+Python
+if user.plan == "free" and estimates_used >= 2:
+    redirect_to_pricing()
+Copy code
+Python
+if stripe_webhook == "payment_success":
+    upgrade_user_plan()
+📈 PART 5: HOW THIS HITS $1K–$5K / MONTH
+🎯 Month 1 Goal
+30 Pro users → $870
+10 Contractor+ → $790
+5 Lifetime → $745
+💰 Total: $2,400/month
+🚀 Month 2–3
+Facebook groups
+Google Ads ($5/day)
+Contractor referrals
+SEO blog posts
+Target:
+100 Pro users
+30 Contractor+
+20 Lifetime
+💰 $5,000–$7,000/month
+✅ PART 6: REPLIT DEPLOYMENT CHECKLIST
+REQUIRED
+☑ Landing page
+☑ Pricing page
+☑ Auth system
+☑ Stripe checkout
+☑ Usage limits
+☑ Estimate generation
+☑ Save results
+STRONGLY RECOMMENDED
+☑ PDF export
+☑ Email receipts
+☑ Admin dashboard
+☑ Usage tracking
+☑ Analytics
+🏁 FINAL VERDICT
+This is not a toy project anymore.
+✔ Real problem
+✔ Real audience
+✔ Real monetization
+✔ Scalable
+✔ Sellable
+You’re 1–2 implementation steps away from a legitimate SaaS business.

@@ -1,0 +1,76 @@
+What I Need From You (Copy-Paste Checklist)
+1️⃣ List of SaaS Products (Authoritative)
+For each app, send:
+Name
+Live URL (or “not live yet”)
+What it does (1 sentence)
+Target customer (who pays)
+Status (MVP / live / revenue / dormant)
+👉 Even rough is fine. I’ll clean it.
+2️⃣ Revenue & Monetization (Last 30 Days)
+For each app:
+Current MRR ($0 is OK)
+One-time sales (if any)
+Pricing plans
+Stripe connected? (Yes/No)
+Any churn yet? (Yes/No/Too early)
+If no revenue yet, tell me what’s implemented vs planned.
+3️⃣ Users & Traction (Reality Numbers)
+For each app:
+Total users
+Active users (rough)
+Daily/weekly traffic (Replit, GA, Plausible—whatever you have)
+Email list size (if any)
+Estimates are acceptable. Lying is not (buyers detect it instantly).
+4️⃣ Tech & Ownership (Critical)
+Answer yes/no to each:
+You own 100% of the code
+No cofounders or disputed IP
+No open legal issues
+Built primarily by you
+One codebase or multiple?
+Also:
+Tech stack (Next.js, Replit, Supabase, etc.)
+5️⃣ Automation Level (This Raises Multiples)
+Tell me:
+Does it onboard users automatically?
+Does billing run itself?
+Any auto-emails, AI flows, or background jobs?
+Can it run 30 days with zero input from you?
+Even partial automation matters.
+6️⃣ Market & Positioning (Short Answers)
+For each app:
+Who is the direct competitor (if any)?
+Why would someone pick yours instead?
+Is this B2B, prosumer, or consumer?
+7️⃣ Your Exit Preference (Important)
+Pick one:
+🔹 Sell everything
+🔹 Sell weakest apps, keep strongest
+🔹 Raise money / partial sale
+🔹 Just want a valuation benchmark
+This changes pricing strategy.
+🔍 What I’ll Deliver Back to You
+Once you answer the above, I’ll give you:
+📊 1. Per-App Valuation (Low / Mid / High)
+Each app gets:
+Standalone value
+Buyer type fit
+Likely sale timeline
+🏗️ 2. Studio / Portfolio Valuation
+Bundle discount vs bundle premium
+Best packaging structure
+Clean asking price
+💰 3. Realistic Asking Price
+Not fantasy—what the market would actually pay today.
+🚀 4. Fast Value Boost Plan (30–60 Days)
+Exact steps to push valuation up without rebuilding everything.
+⚠️ One Important Rule (Straight Talk)
+I will not inflate numbers.
+Inflated valuations kill deals and burn reputation.
+But I will:
+Frame you correctly
+Price strategically
+Maximize leverage
+👉 Next Step
+Reply with Section 1–7 in order (even if brief).

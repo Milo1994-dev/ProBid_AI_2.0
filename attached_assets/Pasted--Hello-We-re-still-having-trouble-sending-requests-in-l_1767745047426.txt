@@ -1,0 +1,89 @@
+
+ 
+ 	 
+ 	 
+ 
+ 
+ 	Hello, 	 
+ 
+ 
+ 	We’re still having trouble sending requests in live mode to a webhook endpoint associated with your Probid AI account. Stripe sends webhook events to your server to notify you of activity in your Stripe account, such as a completed payout or a newly created invoice. 	 
+ 
+ 
+ 	The URL of the failing webhook endpoint is: https://business-compliance-guide--jessekirchner24.replit.app/api/stripe/webhook 
+ 
+ 
+ 
+ 	You (or someone on your team) configured your Stripe account to send events to that URL. You can change your account’s webhook endpoints from the Dashboard. 
+ 
+ 
+ 
+ 	In most cases, a failing webhook does not impact your payments or payouts. However: 	 
+ 
+ 
+ 
+ 	 
+ 	 	 
+ 
+	If you use subscriptions, we rely on your webhook endpoint to notify you of new invoices. These invoices may be delayed for up to three days if your endpoint is unable to successfully receive them.	 
+ 
+ 
+ 	 
+ 	 	 
+ 
+	If you use Checkout and rely on the checkout.session.completed event as part of your purchase fulfillment process, you should review your completed payments to ensure you have fulfilled all recent purchases.	 
+ 
+ 			
+ 
+ 	We’ve attempted to send event notifications to this endpoint 2,103 times since the first failure on January 1, 2026 at 12:10:50 AM UTC. If this endpoint is important to your application, please try and fix the issue. If you do not need this webhook endpoint, you can remove it from your Stripe webhook settings. We will stop sending event notifications to this webhook endpoint by January 10, 2026 at 12:10:50 AM UTC. 	 
+ 
+ 
+ 	Here is the summary of errors we received while attempting to send webhook events: 	 
+ 
+ 
+ 
+ 	 
+ 	 	 
+ 
+	1,598 requests returned a HTTP 301, indicating your server is redirecting Stripe to deliver the event to a new location. This usually signifies you should update your webhook endpoint’s URL. 	 
+ 
+ 			
+ 
+ 
+ 	 
+ 	 	 
+ 
+	505 requests had other errors while sending the webhook event. 	 
+ 
+ 			
+ 
+ 	You need to return any status code between HTTP 200 to 299 for Stripe to consider the webhook event successfully delivered. 	 
+ 
+ 
+ 	For more details on these errors and to review your account’s recent activity, you can find the full set of events and request logs on the Dashboard. 	 
+ 
+ 
+ 	This email is the last time we’ll reach out to you before disabling the webhook. 	 
+ 
+ 
+ 	For more in-depth information on how to use webhooks, we recommend reviewing our documentation. 
+ 
+ 
+ 
+ 	— The Stripe team 	 
+ 
+ 
+ 
+ 	This email relates to your Probid AI Stripe account.
+Account ID: acct_1RFf73HHUrCDfRAx
+Need to refer to this message? Use this ID: em_hoxkaavelce8acge2awb9odi33gdhz 	 
+ 		
+ 	Stripe, 354 Oyster Point Blvd, South San Francisco, CA 94080 	 
+ 		
+ 	You are currently subscribed to "Webhook failures" emails. To unsubscribe, manage your communication preferences. 
+ 
+ 		
+ 		
+ 		
+
+

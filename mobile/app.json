@@ -1,0 +1,70 @@
+{
+  "expo": {
+    "name": "ProBid AI",
+    "slug": "probid-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "probidai",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "backgroundColor": "#0B0F1A",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.probidai.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "ProBid AI uses the camera to capture job site photos for generating estimates.",
+        "NSPhotoLibraryUsageDescription": "ProBid AI accesses your photo library to select job site photos for generating estimates."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B0F1A"
+      },
+      "package": "com.probidai.app",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "extra": {
+      "apiBaseUrl": "https://probid-core.replit.app",
+      "eas": {
+        "projectId": "fe5872d8-6921-41b0-8cc9-466d2479adaf"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow ProBid AI to access your camera for job site photos."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow ProBid AI to access your photos for job site images."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#00E676"
+        }
+      ]
+    ]
+  }
+}

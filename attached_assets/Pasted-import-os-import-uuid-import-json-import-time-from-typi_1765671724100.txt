@@ -1,0 +1,439 @@
+import os
+import uuid
+import json
+import time
+from typing import Optional
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+import stripe
+
+# -----------------------------
+# CONFIG (set these in Replit Secrets)
+# -----------------------------
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")              # Stripe Price ID for $25/mo
+STRIPE_PRICE_BUSINESS = os.getenv("STRIPE_PRICE_BUSINESS", "")    # Stripe Price ID for $55/mo
+BASE_URL = os.getenv("BASE_URL", "")  # e.g. https://your-app.yourname.replit.app
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")  # optional (you can stub estimates without it)
+
+APP_NAME = "ProBid AI"
+VERSION = "1.0.0"
+
+stripe.api_key = STRIPE_SECRET_KEY
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -----------------------------
+# VERY SIMPLE IN-MEMORY STATE (MVP)
+# NOTE: resets if app restarts. Use DB in production.
+# -----------------------------
+VISITOR = {}  # visitor_id -> {"free_used": bool, "paid": bool, "paid_plan": str, "paid_at": int}
+
+def get_or_set_visitor_id(req: Request) -> str:
+    vid = req.cookies.get("visitor_id")
+    if not vid:
+        vid = str(uuid.uuid4())
+    if vid not in VISITOR:
+        VISITOR[vid] = {"free_used": False, "paid": False, "paid_plan": None, "paid_at": None}
+    return vid
+
+def is_paid(vid: str) -> bool:
+    return bool(VISITOR.get(vid, {}).get("paid"))
+
+def free_used(vid: str) -> bool:
+    return bool(VISITOR.get(vid, {}).get("free_used"))
+
+def mark_free_used(vid: str):
+    VISITOR[vid]["free_used"] = True
+
+def mark_paid(vid: str, plan: str):
+    VISITOR[vid]["paid"] = True
+    VISITOR[vid]["paid_plan"] = plan
+    VISITOR[vid]["paid_at"] = int(time.time())
+
+def require_base_url() -> str:
+    # BASE_URL is strongly recommended for Stripe redirects.
+    # If not set, we attempt to infer from request in create-checkout route, but setting is best.
+    return BASE_URL.strip().rstrip("/")
+
+# -----------------------------
+# ESTIMATE ENGINE (MVP)
+# Replace this with your real estimator / OpenAI call later
+# -----------------------------
+def generate_estimate_text(description: str) -> str:
+    # MVP heuristic estimate template (fast + predictable)
+    # You can wire OpenAI into here when you want.
+    desc = description.strip()
+    base = [
+        "ESTIMATE SUMMARY (Quick-Use)",
+        f"- Job Description: {desc[:280]}{'...' if len(desc) > 280 else ''}",
+        "",
+        "SCOPE (assumed):",
+        "- Site visit, setup, basic protection",
+        "- Labor + materials based on typical local conditions",
+        "- Cleanup and haul-away (if applicable)",
+        "",
+        "LINE ITEMS (rough):",
+        "- Labor: $650 – $1,850",
+        "- Materials: $250 – $1,500",
+        "- Overhead/Profit: 15% – 25%",
+        "",
+        "TOTAL RANGE (rough):",
+        "$1,250 – $4,900",
+        "",
+        "NOTES:",
+        "- This is a fast estimate. Final price depends on access, quantities, existing conditions, and schedule.",
+        "- Add photos + measurements for a tighter number.",
+    ]
+    return "\n".join(base)
+
+# -----------------------------
+# HTML UI (no React, fastest money)
+# -----------------------------
+def page_template(title: str, body_html: str) -> str:
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #0b0f17;
+      color: #e9eef7;
+      margin: 0; padding: 0;
+    }}
+    .wrap {{ max-width: 820px; margin: 0 auto; padding: 22px; }}
+    .card {{
+      background: #121a2a;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      margin-bottom: 14px;
+    }}
+    h1 {{ font-size: 26px; margin: 0 0 8px; }}
+    h2 {{ font-size: 18px; margin: 0 0 8px; opacity: 0.95; }}
+    p {{ line-height: 1.45; opacity: 0.95; }}
+    .muted {{ opacity: 0.75; font-size: 14px; }}
+    textarea {{
+      width: 100%;
+      min-height: 140px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: #0b1222;
+      color: #e9eef7;
+      padding: 12px;
+      font-size: 15px;
+      outline: none;
+    }}
+    button {{
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button.secondary {{
+      background: rgba(255,255,255,0.10);
+    }}
+    .row {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
+    .pill {{
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.10);
+      font-size: 13px;
+      margin-right: 8px;
+    }}
+    pre {{
+      white-space: pre-wrap;
+      background: #0b1222;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 12px;
+      border-radius: 12px;
+      overflow-x: auto;
+    }}
+    a {{ color: #93c5fd; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .pricing {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }}
+    .price {{
+      font-size: 28px;
+      font-weight: 900;
+      margin: 10px 0 6px;
+    }}
+    .warn {{
+      border-left: 4px solid #f59e0b;
+      padding-left: 12px;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    {body_html}
+    <div class="muted" style="margin-top:16px;">
+      {APP_NAME} v{VERSION} • Money-core build • <a href="/status">status</a>
+    </div>
+  </div>
+</body>
+</html>"""
+
+@app.get("/status")
+def status():
+    return {"status": "ProBid AI money-core running", "version": VERSION}
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    vid = get_or_set_visitor_id(request)
+
+    used = free_used(vid)
+    paid = is_paid(vid)
+
+    badge = '<span class="pill">Unlimited Access ✅</span>' if paid else (
+        '<span class="pill">1 Free Estimate Remaining ✅</span>' if not used else '<span class="pill">Free Used ❌</span>'
+    )
+
+    body = f"""
+    <div class="card">
+      <h1>{APP_NAME}</h1>
+      <p class="muted">Upload nothing complicated. Describe the job. Get a usable estimate in minutes.</p>
+      <div class="row">{badge}<span class="pill">Built for owner-operators</span><span class="pill">Fast → Profit</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Get an estimate</h2>
+      <p class="muted">Type the job details like you’d tell a crew lead. Keep it simple. </p>
+      <form method="POST" action="/estimate">
+        <textarea name="description" placeholder="Example: Tuckpoint 25ft of chimney, replace 10 bricks, access from driveway, 2-story house. Needs matching mortar. Cleanup included."></textarea>
+        <div class="row" style="margin-top:10px;">
+          <button type="submit">Generate Estimate</button>
+          <a href="/pay"><button class="secondary" type="button">Upgrade / Paywall</button></a>
+        </div>
+      </form>
+      <p class="muted" style="margin-top:10px;">
+        Free users get 1 estimate. Paid plans unlock unlimited.
+      </p>
+    </div>
+    """
+
+    html = page_template(f"{APP_NAME} – Estimate Fast", body)
+    resp = HTMLResponse(html)
+    resp.set_cookie("visitor_id", vid, httponly=True, samesite="lax", max_age=60*60*24*365)
+    return resp
+
+@app.post("/estimate", response_class=HTMLResponse)
+async def estimate(request: Request, description: str = Form(...)):
+    vid = get_or_set_visitor_id(request)
+
+    # Paywall logic: allow if paid OR free not used
+    if (not is_paid(vid)) and free_used(vid):
+        # Already used the free one
+        return RedirectResponse("/pay?reason=free_used", status_code=303)
+
+    # Mark free used if not paid
+    if not is_paid(vid) and not free_used(vid):
+        mark_free_used(vid)
+
+    estimate_text = generate_estimate_text(description)
+
+    badge = '<span class="pill">Unlimited Access ✅</span>' if is_paid(vid) else '<span class="pill">Free Estimate Used ✅</span>'
+
+    body = f"""
+    <div class="card">
+      <h1>Your Estimate</h1>
+      <div class="row">{badge}<a href="/"><span class="pill">New Estimate</span></a><a href="/pay"><span class="pill">Upgrade</span></a></div>
+    </div>
+
+    <div class="card">
+      <pre>{estimate_text}</pre>
+      <p class="muted">Tip: add measurements + a couple photos later to tighten the range.</p>
+    </div>
+    """
+
+    html = page_template(f"{APP_NAME} – Estimate", body)
+    resp = HTMLResponse(html)
+    resp.set_cookie("visitor_id", vid, httponly=True, samesite="lax", max_age=60*60*24*365)
+    return resp
+
+@app.get("/pay", response_class=HTMLResponse)
+async def paywall(request: Request, reason: Optional[str] = None):
+    vid = get_or_set_visitor_id(request)
+
+    reason_msg = ""
+    if request.query_params.get("reason") == "free_used":
+        reason_msg = """
+        <div class="card warn">
+          <h2>Free estimate used</h2>
+          <p class="muted">Upgrade to keep generating unlimited estimates.</p>
+        </div>
+        """
+
+    paid = is_paid(vid)
+    if paid:
+        body = f"""
+        <div class="card">
+          <h1>You’re unlocked ✅</h1>
+          <p class="muted">Plan: {VISITOR[vid].get("paid_plan")}. Unlimited estimates are enabled.</p>
+          <a href="/"><button>Back to Estimates</button></a>
+        </div>
+        """
+        html = page_template(f"{APP_NAME} – Unlocked", body)
+        resp = HTMLResponse(html)
+        resp.set_cookie("visitor_id", vid, httponly=True, samesite="lax", max_age=60*60*24*365)
+        return resp
+
+    pro_ok = "✅" if STRIPE_PRICE_PRO else "❌ (missing STRIPE_PRICE_PRO)"
+    biz_ok = "✅" if STRIPE_PRICE_BUSINESS else "❌ (missing STRIPE_PRICE_BUSINESS)"
+    base_ok = "✅" if require_base_url() else "❌ (set BASE_URL in secrets)"
+
+    body = f"""
+    {reason_msg}
+
+    <div class="card">
+      <h1>Upgrade & Unlock Unlimited</h1>
+      <p class="muted">Fast estimates win jobs. Paid plans unlock unlimited use.</p>
+      <div class="muted">Setup check: BASE_URL {base_ok} • Pro Price {pro_ok} • Business Price {biz_ok}</div>
+    </div>
+
+    <div class="card">
+      <div class="pricing">
+        <div class="card">
+          <h2>Pro</h2>
+          <div class="price">$25<span class="muted">/mo</span></div>
+          <p class="muted">Unlimited basic estimates</p>
+          <form method="POST" action="/create-checkout-session">
+            <input type="hidden" name="plan" value="pro"/>
+            <button type="submit">Subscribe (Pro)</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Business</h2>
+          <div class="price">$55<span class="muted">/mo</span></div>
+          <p class="muted">Unlimited + priority features (add later)</p>
+          <form method="POST" action="/create-checkout-session">
+            <input type="hidden" name="plan" value="business"/>
+            <button type="submit">Subscribe (Business)</button>
+          </form>
+        </div>
+      </div>
+
+      <p class="muted" style="margin-top:10px;">
+        After payment you’ll be redirected back and unlocked automatically.
+      </p>
+
+      <a href="/"><button class="secondary" type="button">Back</button></a>
+    </div>
+    """
+
+    html = page_template(f"{APP_NAME} – Paywall", body)
+    resp = HTMLResponse(html)
+    resp.set_cookie("visitor_id", vid, httponly=True, samesite="lax", max_age=60*60*24*365)
+    return resp
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(request: Request, plan: str = Form(...)):
+    vid = get_or_set_visitor_id(request)
+
+    base = require_base_url()
+    if not base:
+        # Fallback: infer from request headers (not always reliable behind proxies)
+        proto = request.headers.get("x-forwarded-proto", "https")
+        host = request.headers.get("host", "")
+        if host:
+            base = f"{proto}://{host}"
+        else:
+            return JSONResponse({"error": "BASE_URL not set and could not infer host. Set BASE_URL in secrets."}, status_code=400)
+
+    if not STRIPE_SECRET_KEY:
+        return JSONResponse({"error": "Missing STRIPE_SECRET_KEY in env."}, status_code=400)
+
+    if plan == "pro":
+        if not STRIPE_PRICE_PRO:
+            return JSONResponse({"error": "Missing STRIPE_PRICE_PRO in env."}, status_code=400)
+        price_id = STRIPE_PRICE_PRO
+    elif plan == "business":
+        if not STRIPE_PRICE_BUSINESS:
+            return JSONResponse({"error": "Missing STRIPE_PRICE_BUSINESS in env."}, status_code=400)
+        price_id = STRIPE_PRICE_BUSINESS
+    else:
+        return JSONResponse({"error": "Invalid plan."}, status_code=400)
+
+    # Stripe Checkout for subscription
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=f"{base}/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{base}/pay?canceled=1",
+        metadata={"visitor_id": vid, "plan": plan},
+    )
+
+    return RedirectResponse(session.url, status_code=303)
+
+@app.get("/success", response_class=HTMLResponse)
+async def success(request: Request, session_id: str):
+    vid = get_or_set_visitor_id(request)
+
+    if not STRIPE_SECRET_KEY:
+        return JSONResponse({"error": "Missing STRIPE_SECRET_KEY in env."}, status_code=400)
+
+    # Verify the Stripe session
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        # session.payment_status may not exist for subscriptions, but session.status + subscription indicates success
+        meta = session.get("metadata", {}) or {}
+        plan = meta.get("plan", "pro")
+        visitor_id_from_meta = meta.get("visitor_id")
+
+        # Only unlock if this session belongs to the same visitor OR if metadata is missing (MVP tolerance)
+        if visitor_id_from_meta and visitor_id_from_meta != vid:
+            # If cookie changed, still allow unlocking the visitor_id in metadata:
+            vid = visitor_id_from_meta
+            if vid not in VISITOR:
+                VISITOR[vid] = {"free_used": True, "paid": False, "paid_plan": None, "paid_at": None}
+
+        mark_paid(vid, plan)
+
+    except Exception as e:
+        return JSONResponse({"error": f"Could not verify Stripe session: {str(e)}"}, status_code=400)
+
+    body = f"""
+    <div class="card">
+      <h1>Unlocked ✅</h1>
+      <p class="muted">You now have unlimited estimates. You can go back and keep generating bids.</p>
+      <div class="row">
+        <a href="/"><button>Go to Estimates</button></a>
+        <a href="/pay"><button class="secondary" type="button">View Plan</button></a>
+      </div>
+    </div>
+    """
+    html = page_template(f"{APP_NAME} – Success", body)
+    resp = HTMLResponse(html)
+    resp.set_cookie("visitor_id", vid, httponly=True, samesite="lax", max_age=60*60*24*365)
+    return resp
+
+# -----------------------------
+# Replit runner
+# -----------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)

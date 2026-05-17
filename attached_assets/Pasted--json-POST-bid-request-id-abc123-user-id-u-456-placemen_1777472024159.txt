@@ -1,0 +1,150 @@
+```json
+POST /bid
+{
+  "request_id": "abc123",
+  "user_id": "u-456",
+  "placement_id": "slot-1",
+  "timestamp": 1714400000,
+  "device": "mobile",
+  "geo": "US",
+  "features": {
+    "user_ctr_7d": 0.042,
+    "campaign_ctr_7d": 0.031,
+    "hour_of_day": 14,
+    "day_of_week": 2,
+    "past_conversions_30d": 3
+  },
+  "constraints": {
+    "campaign_id": "camp-789",
+    "max_bid_cents": 300
+  }
+}
+```
+
+**Response (from Probid service):**
+
+```json
+{
+  "request_id": "abc123",
+  "bid_cents": 125,
+  "prob_click": 0.035,
+  "prob_conversion": 0.004,
+  "reason": "ok"
+}
+```
+
+To build this:
+
+1. Load your trained model (e.g., XGBoost/LightGBM/NN) in a server:
+   - Python: FastAPI/Flask
+   - Node: Express
+   - Java/Go: your usual HTTP framework
+2. Implement:
+   - Feature mapping (from request JSON → model input vector)
+   - Model prediction
+   - Bid formula (e.g. `bid = p(click) × value_per_click × factor`, capped by constraints)
+3. Package as a Docker image and deploy it (Kubernetes, ECS, VM, etc.)
+4. Add health checks and metrics (latency, error rate).
+
+---
+
+## 3. Provide the right features online
+
+The model can only work in bidding if the **same (or compatible) features** it was trained on are available in real time.
+
+Steps:
+
+1. List the features your model uses (from training code).  
+2. For each feature, decide how to get it at request time:
+   - From the request itself (device, geo, placement)
+   - From an **online store** (Redis, DynamoDB, Cassandra, etc.)
+   - From a last-known snapshot precomputed in batch and pushed to a fast store
+3. Build an “online feature pipeline”:
+   - Batch jobs compute aggregates (CTR, frequency, etc.) periodically
+   - They push results to Redis/feature store keyed by `user_id`, `campaign_id`, etc.
+4. In the bidder service:
+   - On each request, fetch features by key
+   - Fall back to sensible defaults if missing
+
+---
+
+## 4. Add policy: budgets, pacing, constraints
+
+The raw model usually gives you probabilities or expected value; production bidding needs **policy logic**:
+
+- Respect **campaign budgets** (daily/monthly)
+- Pacing: don’t spend all budget at 8:05 AM
+- Caps: max bid, floor/ceiling ROAS/CPA
+
+Typical flow in the Probid service:
+
+1. Get the **campaign** (or line item) for this request.
+2. Fetch its current spend + budget constraints (from DB/cache).
+3. Compute base bid from model:
+   ```text
+   base_bid = p(click) * value_per_click       # or p(conv) * value_per_conv
+   ```
+4. Apply pacing and caps:
+   ```text
+   adjusted_bid = pacing_factor * base_bid
+   adjusted_bid = min(adjusted_bid, max_bid)
+   ```
+5. If budget nearly exhausted, reduce bids or no‑bid.
+
+This policy layer is what makes it safe to switch from old bidder to Probid.
+
+---
+
+## 5. Connect traffic to the Probid bidder
+
+Now wire Probid into the **request flow**.
+
+Common pattern:
+
+1. Ad server / exchange / frontend receives a bid request.
+2. It calls your **bidding orchestrator** (or directly the Probid service).
+3. Bidding orchestrator:
+   - Prepares context & features
+   - Calls Probid `/bid`
+   - Gets `bid_cents` back
+4. Responds to the exchange / renders ad based on that bid/decision.
+
+Integration steps:
+
+- Add a config flag or experiment key like `use_probid = true/false`.
+- In your bidder code:
+  - If `use_probid`: call Probid service.
+  - Else: use legacy logic.
+- Log both decisions (for analysis).
+
+---
+
+## 6. Start in shadow mode, then A/B test
+
+Don’t switch 100% at once. Use three phases:
+
+1. **Shadow mode**
+   - Your system calls Probid with live traffic.
+   - Ignores its bids for real auctions (uses current bidder).
+   - Logs Probid’s hypothetical bid + outcome.
+   - Compare performance offline.
+
+2. **A/B test**
+   - Send, say, 5–10% of traffic to Probid bidder (actual bids used).
+   - Compare metrics vs control: ROI, revenue, CPA, CTR, win rate.
+
+3. **Ramp-up**
+   - If metrics are good and stable, gradually increase Probid’s share to 50% → 100%.
+
+---
+
+## 7. Monitor and iterate
+
+Add monitoring:
+
+- Latency of `/bid` endpoint
+- Error rate/timeouts
+- Business KPIs: spend, ROI, CPA, CTR, conversion rate
+- Drift vs training data (distribution of features, probabilities vs actuals)
+
+Set up alerts (e.g., on spend anomalies or ROI drops) and a fast rollback toggle (switch all traffic back to old bidder if needed).

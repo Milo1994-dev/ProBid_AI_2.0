@@ -1,0 +1,387 @@
+PROJECT: PROBID CORE / PROBID AI
+GOAL: Turn the current app into a high-converting, production-ready SaaS landing page + app shell that is optimized for trust, signups, demos, and paid conversions.
+
+IMPORTANT RULES:
+- Do NOT break existing backend business logic unless absolutely necessary.
+- Preserve existing auth, billing, AI estimate generation, and database flows if they already work.
+- Improve frontend, conversion, CTA flow, tracking, demo experience, and trust.
+- Keep everything mobile-friendly.
+- Keep all code clean and production-ready.
+- If an existing route/file already exists, upgrade it instead of creating duplicate logic.
+- Do not leave placeholder TODOs. Fully implement working code.
+- Make the app look polished, premium, fast, and trustworthy for real contractors.
+- If there is old server-rendered HTML, replace with modern React/Tailwind UI if the project supports it.
+- If the app is already React-based, improve the existing React app rather than rebuilding from scratch.
+
+==================================================
+PHASE 1 — LANDING PAGE REBUILD FOR CONVERSION
+==================================================
+
+Rebuild or heavily improve the homepage so it clearly communicates the value in 3 seconds.
+
+HERO SECTION:
+- Headline:
+  "Upload 1 Job Photo → Get a Full Construction Estimate in 30 Seconds"
+- Subheadline:
+  "ProBid AI helps contractors generate professional estimates fast from job photos and descriptions — saving hours and helping win more jobs."
+- Primary CTA:
+  "Get 3 Free Estimates"
+- Secondary CTA:
+  "See Example Estimate"
+
+Include:
+- clean hero layout
+- strong spacing
+- contractor/professional visual tone
+- trust badges row below hero:
+  - Fast
+  - Professional
+  - Built for Contractors
+  - AI-Powered
+
+Add a short value row under hero:
+- Save hours per estimate
+- Send cleaner proposals
+- Quote jobs faster
+- Close more work
+
+==================================================
+PHASE 2 — LIVE DEMO / SAMPLE ESTIMATE EXPERIENCE
+==================================================
+
+Create a no-signup-required demo section on the landing page.
+
+SECTION TITLE:
+"See How ProBid Works"
+
+Add 3 preloaded sample jobs:
+1. Chimney Repair
+2. Brick Wall Repair
+3. Concrete Driveway Repair
+
+When user clicks one:
+- open a demo estimate preview panel or route
+- show:
+  - project title
+  - short scope
+  - estimated materials
+  - estimated labor
+  - estimated total
+  - turnaround time badge like "Generated in 27 seconds"
+
+This demo can use mock data if necessary, but it must look fully real and polished.
+
+Add CTA under demo:
+- "Try Your Own Job"
+- if not signed in: send to signup
+- if signed in: send to actual estimate flow
+
+==================================================
+PHASE 3 — TRUST / AUTHORITY / SOCIAL PROOF
+==================================================
+
+Add a trust section to the homepage.
+
+SECTION TITLE:
+"Built for Real Contractors"
+
+Include:
+- founder credibility line:
+  "Created by Jesse Kirchner — Contractor & Builder"
+- trust cards:
+  - Professional estimate output
+  - Faster job quoting
+  - Built for field use
+  - Works on desktop and mobile
+
+Add testimonial cards.
+Use realistic seed testimonials for now if real ones do not exist yet:
+- "This saves me a ton of time quoting small jobs."
+- "Way faster than building every estimate by hand."
+- "Clean output and easy to use."
+
+Make them visually polished.
+
+Add a “Why contractors use it” section:
+- Manual estimates are slow
+- Faster quotes win jobs
+- Cleaner presentation builds trust
+- One extra closed job can pay for the software
+
+==================================================
+PHASE 4 — PRICING SECTION OPTIMIZATION
+==================================================
+
+Create or improve pricing page/section.
+
+Pricing structure:
+- Free: 3 estimates
+- Pro: $25/month
+- Business: $55/month
+
+For each tier, clearly show:
+- estimates/month or fair usage
+- professional outputs
+- saved history
+- faster workflow
+- business/team tools for higher tier if available
+
+Add conversion copy:
+- "Close just one extra job and ProBid pays for itself."
+
+Add CTA buttons under each plan:
+- Free: "Start Free"
+- Pro: "Upgrade to Pro"
+- Business: "Choose Business"
+
+Highlight Pro as most popular.
+
+If Stripe checkout already exists:
+- wire CTAs directly to checkout/billing flow
+If not:
+- wire buttons to signup/billing placeholder routes cleanly without errors
+
+==================================================
+PHASE 5 — LEAD CAPTURE + EMAIL HOOK
+==================================================
+
+Add a lead capture section on homepage for users not ready to sign up.
+
+SECTION TITLE:
+"Want a free sample estimate?"
+
+Fields:
+- Name
+- Email
+- Trade type
+- Optional project description
+
+Submit action:
+- store lead in database if DB exists
+- or send to backend endpoint
+- or email/store reliably in a simple leads table
+
+After submit:
+- show success message
+- optionally redirect to signup
+
+Add simple admin-safe backend handling if needed.
+
+==================================================
+PHASE 6 — ANALYTICS + EVENT TRACKING
+==================================================
+
+Implement tracking throughout the app.
+
+Track these events:
+- homepage_view
+- hero_primary_cta_click
+- hero_secondary_cta_click
+- demo_card_click
+- pricing_view
+- pricing_cta_click
+- signup_start
+- signup_complete
+- estimate_start
+- estimate_complete
+- checkout_start
+- checkout_success
+- lead_form_submit
+
+If GA4 is already available:
+- wire through a reusable analytics helper
+- respect env var if present, such as VITE_GA_MEASUREMENT_ID
+If not available:
+- create a clean analytics abstraction so GA can be plugged in later
+
+Do not scatter random event code. Centralize it in helper utilities.
+
+==================================================
+PHASE 7 — APP UX POLISH
+==================================================
+
+Audit the main app experience and improve it:
+- dashboard
+- estimate flow
+- history
+- billing
+- affiliate/referral if already present
+
+Requirements:
+- fast loading
+- clear empty states
+- consistent buttons
+- modern cards
+- nice spacing
+- mobile responsive
+- no broken links
+- no dead buttons
+- no ugly raw JSON or inconsistent text
+
+If there are loading states:
+- use clean loaders/skeletons
+If there are errors:
+- show professional error states, not raw stack traces
+
+==================================================
+PHASE 8 — EXAMPLE ESTIMATE OUTPUT QUALITY
+==================================================
+
+Improve the estimate results screen so it feels like a real product.
+
+Estimate result must show:
+- Project title
+- Scope summary
+- Material estimate
+- Labor estimate
+- Subtotal
+- Total estimate
+- Notes/disclaimer
+- Professional formatting
+
+Add CTA at bottom:
+- "Download / Send Proposal" if that feature exists
+- or "Upgrade to unlock branded proposals" if needed
+
+If PDF generation exists:
+- keep it working
+- style output more professionally if possible
+
+==================================================
+PHASE 9 — AFFILIATE / REFERRAL PLACEMENT
+==================================================
+
+If the app already has affiliate/referral logic:
+- surface it better in dashboard
+- show "Earn 20% recurring commission" message
+- give user a simple shareable referral link area
+- include copy button
+- include stats if data exists:
+  - clicks
+  - signups
+  - earnings
+
+If the affiliate backend does not fully exist:
+- create polished frontend placeholders that connect to current routes if possible
+- do not invent fake backend logic unless necessary
+
+==================================================
+PHASE 10 — TECHNICAL CLEANUP
+==================================================
+
+Do a professional cleanup pass:
+
+- remove duplicate components
+- remove broken imports
+- remove dead code if safe
+- ensure builds succeed
+- ensure no console spam
+- ensure no runtime crash on homepage
+- ensure routes work on refresh if SPA
+- ensure production build is deployable on Replit
+
+If Express serves frontend:
+- make sure client build is served correctly
+- ensure non-API routes fallback to index.html
+- preserve API routes
+
+If environment variables are needed:
+- clearly list them in comments or .env example
+
+==================================================
+DESIGN STYLE
+==================================================
+
+Use:
+- modern SaaS polish
+- Tailwind styling if available
+- strong typography
+- premium cards
+- blue / slate / neutral professional palette
+- mobile-first layout
+- minimal clutter
+- clean contractor-friendly wording
+
+Tone:
+- direct
+- trustworthy
+- fast
+- professional
+- money-saving
+- contractor-focused
+
+==================================================
+REQUIRED DELIVERABLES
+==================================================
+
+1. Fully upgraded homepage
+2. Demo/sample estimate section
+3. Trust/testimonial/founder section
+4. Improved pricing section
+5. Lead capture form with backend handling
+6. Analytics helper + tracked events
+7. Polished estimate results UX
+8. Better dashboard polish where needed
+9. Affiliate/referral visibility if supported
+10. Production-ready build with no major errors
+
+==================================================
+ACCEPTANCE CHECKLIST
+==================================================
+
+The task is only complete if all are true:
+
+- Homepage instantly explains what ProBid does
+- There is a strong CTA above the fold
+- Visitors can view a sample/demo estimate without signup
+- Pricing is clear and professionally presented
+- Trust signals exist
+- Founder name is visible
+- Lead capture works
+- Tracking events are implemented
+- Main app feels polished, not prototype-like
+- Build passes cleanly
+- App is mobile friendly
+- No obvious broken links or dead sections
+- Conversion experience is materially better than before
+
+==================================================
+BONUS IMPROVEMENTS IF TIME ALLOWS
+==================================================
+
+- Add sticky mobile CTA bar
+- Add FAQ section:
+  - How accurate are estimates?
+  - Can I use my phone?
+  - Does it work for small contractors?
+  - How fast is it?
+- Add “Generated by ProBid AI” footer on example/demo estimate
+- Add a comparison section:
+  "Manual estimating vs ProBid AI"
+- Add small “Used for masonry, concrete, chimney, repair, remodeling, and more” section
+- Add a top nav with:
+  - Features
+  - Demo
+  - Pricing
+  - Login
+  - Get Started
+
+==================================================
+FINAL INSTRUCTION
+==================================================
+
+Start by inspecting the current codebase and preserving any working auth, billing, AI estimate generation, and database infrastructure. Then implement the highest-value conversion and UX improvements first:
+1. homepage
+2. demo
+3. trust
+4. pricing
+5. lead capture
+6. analytics
+7. app polish
+
+When finished:
+- run/build the project
+- fix any errors
+- ensure production readiness on Replit
+- summarize exactly what changed
+- identify any remaining blockers

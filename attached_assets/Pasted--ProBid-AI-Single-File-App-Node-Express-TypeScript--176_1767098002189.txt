@@ -1,0 +1,1019 @@
+/**
+ * ProBid AI — Single-File App (Node/Express + TypeScript)
+ * ------------------------------------------------------
+ * What this file includes (ALL IN ONE):
+ * ✅ 96 SEO pages (dynamic from a list)
+ * ✅ "Generate Free Estimate" flow
+ * ✅ 3 free estimates total per user (enforced)
+ * ✅ Paywall on 4th estimate → Stripe Checkout
+ * ✅ PDF proposal generator w/ viral footer
+ * ✅ Referral credits: Give 1 / Get 1 estimate credit
+ * ✅ Email sequence hooks (Nodemailer) + “estimate ready” email
+ * ✅ Minimal analytics event logging
+ * ✅ SQLite storage (file-based) using better-sqlite3
+ *
+ * How to run (Replit):
+ * 1) npm i express body-parser cookie-parser better-sqlite3 pdfkit stripe nodemailer uuid
+ * 2) Set env vars in Replit Secrets:
+ *    - BASE_URL=https://yourdomain.com
+ *    - STRIPE_SECRET_KEY=sk_live_...
+ *    - STRIPE_PRICE_ID=price_...
+ *    - STRIPE_WEBHOOK_SECRET=whsec_...   (optional but recommended)
+ *    - SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM (optional)
+ * 3) npx ts-node app.ts   (or compile)
+ */
+
+import express from "express";
+import bodyParser from "body-parser";
+import cookieParser from "cookie-parser";
+import Stripe from "stripe";
+import nodemailer from "nodemailer";
+import PDFDocument from "pdfkit";
+import Database from "better-sqlite3";
+import { v4 as uuidv4 } from "uuid";
+import crypto from "crypto";
+
+const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: "2mb" }));
+app.use(cookieParser());
+
+// ---------- ENV ----------
+const PORT = Number(process.env.PORT || 3000);
+const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const SMTP_FROM = process.env.SMTP_FROM || "ProBid AI <no-reply@probid.ai>";
+
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" as any }) : null;
+
+// ---------- DB ----------
+const db = new Database("probid.sqlite");
+db.pragma("journal_mode = WAL");
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  email TEXT,
+  paid INTEGER DEFAULT 0,
+  free_used INTEGER DEFAULT 0,
+  referral_code TEXT UNIQUE,
+  referral_credits INTEGER DEFAULT 0,
+  referred_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS estimates (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  trade TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  labor_hours REAL NOT NULL,
+  labor_rate REAL NOT NULL,
+  materials REAL NOT NULL,
+  overhead_pct REAL NOT NULL,
+  profit_pct REAL NOT NULL,
+  total REAL NOT NULL,
+  client_name TEXT,
+  client_email TEXT
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  user_id TEXT,
+  name TEXT NOT NULL,
+  meta TEXT
+);
+
+CREATE TABLE IF NOT EXISTS stripe_sessions (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  checkout_session_id TEXT NOT NULL,
+  status TEXT NOT NULL
+);
+`);
+
+const qGetUser = db.prepare(`SELECT * FROM users WHERE id = ?`);
+const qInsertUser = db.prepare(`
+  INSERT INTO users (id, created_at, email, paid, free_used, referral_code, referral_credits, referred_by)
+  VALUES (@id, @created_at, @email, @paid, @free_used, @referral_code, @referral_credits, @referred_by)
+`);
+const qUpdateUserEmail = db.prepare(`UPDATE users SET email = ? WHERE id = ?`);
+const qUpdateUserPaid = db.prepare(`UPDATE users SET paid = ? WHERE id = ?`);
+const qIncFreeUsed = db.prepare(`UPDATE users SET free_used = free_used + 1 WHERE id = ?`);
+const qDecReferralCredit = db.prepare(`UPDATE users SET referral_credits = MAX(referral_credits - 1, 0) WHERE id = ?`);
+const qIncReferralCredit = db.prepare(`UPDATE users SET referral_credits = referral_credits + 1 WHERE id = ?`);
+const qSetReferredBy = db.prepare(`UPDATE users SET referred_by = ? WHERE id = ? AND (referred_by IS NULL OR referred_by = '')`);
+
+const qInsertEstimate = db.prepare(`
+  INSERT INTO estimates (id, user_id, created_at, trade, scope, labor_hours, labor_rate, materials, overhead_pct, profit_pct, total, client_name, client_email)
+  VALUES (@id, @user_id, @created_at, @trade, @scope, @labor_hours, @labor_rate, @materials, @overhead_pct, @profit_pct, @total, @client_name, @client_email)
+`);
+const qGetEstimates = db.prepare(`SELECT * FROM estimates WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`);
+const qGetEstimate = db.prepare(`SELECT * FROM estimates WHERE id = ? AND user_id = ?`);
+
+const qInsertEvent = db.prepare(`
+  INSERT INTO events (id, created_at, user_id, name, meta)
+  VALUES (@id, @created_at, @user_id, @name, @meta)
+`);
+
+const qInsertStripeSession = db.prepare(`
+  INSERT INTO stripe_sessions (id, created_at, user_id, checkout_session_id, status)
+  VALUES (@id, @created_at, @user_id, @checkout_session_id, @status)
+`);
+const qUpdateStripeSessionStatus = db.prepare(`UPDATE stripe_sessions SET status = ? WHERE checkout_session_id = ?`);
+
+// ---------- HELPERS ----------
+function nowISO() {
+  return new Date().toISOString();
+}
+
+function safeJson(obj: any) {
+  try {
+    return JSON.stringify(obj ?? {});
+  } catch {
+    return "{}";
+  }
+}
+
+function logEvent(userId: string | null, name: string, meta?: any) {
+  qInsertEvent.run({
+    id: uuidv4(),
+    created_at: nowISO(),
+    user_id: userId,
+    name,
+    meta: safeJson(meta),
+  });
+}
+
+function randomReferralCode() {
+  return crypto.randomBytes(4).toString("hex"); // 8 chars
+}
+
+function htmlPage(title: string, body: string) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)}</title>
+  <meta name="description" content="Generate construction estimates and client-ready proposals in 60 seconds." />
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:0; background:#0b0c10; color:#e9eef6;}
+    a{color:#8bd3ff; text-decoration:none}
+    .wrap{max-width:980px; margin:0 auto; padding:24px;}
+    .card{background:#121420; border:1px solid #22263a; border-radius:14px; padding:18px;}
+    .row{display:flex; gap:16px; flex-wrap:wrap;}
+    .col{flex:1; min-width:280px;}
+    .btn{display:inline-block; padding:12px 14px; border-radius:12px; background:#1f6feb; color:white; font-weight:700;}
+    .btn2{display:inline-block; padding:12px 14px; border-radius:12px; background:#2a2f45; color:white; font-weight:700;}
+    input,textarea,select{width:100%; padding:10px; border-radius:10px; border:1px solid #2b314a; background:#0f1220; color:#e9eef6;}
+    label{font-size:13px; opacity:.9;}
+    .small{font-size:12px; opacity:.8}
+    .pill{display:inline-block; padding:6px 10px; border-radius:999px; background:#2a2f45; border:1px solid #343a56; font-size:12px;}
+    .top{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:16px;}
+    .h1{font-size:28px; margin:0 0 8px;}
+    .muted{opacity:.85}
+    .footer{opacity:.6; font-size:12px; margin-top:28px;}
+    .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+    @media(max-width:820px){ .grid{grid-template-columns:1fr;} }
+    .hr{height:1px; background:#22263a; margin:14px 0;}
+    .badge{background:#15314f; border:1px solid #1e4c7a; padding:6px 10px; border-radius:10px; font-size:12px;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="pill">ProBid AI</div>
+      </div>
+      <div>
+        <a class="btn2" href="/dashboard">Dashboard</a>
+        <a class="btn" href="/estimate">Generate Free Estimate</a>
+      </div>
+    </div>
+    ${body}
+    <div class="footer">© ${new Date().getFullYear()} ProBid AI • Generated proposals include a ProBid AI footer for viral growth.</div>
+  </div>
+</body>
+</html>`;
+}
+
+function escapeHtml(s: string) {
+  return (s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function getOrCreateUser(req: express.Request, res: express.Response) {
+  let uid = req.cookies["pb_uid"];
+  if (!uid || typeof uid !== "string") {
+    uid = uuidv4();
+    res.cookie("pb_uid", uid, { httpOnly: true, sameSite: "lax" });
+  }
+
+  let user = qGetUser.get(uid);
+  if (!user) {
+    const referral_code = randomReferralCode();
+    qInsertUser.run({
+      id: uid,
+      created_at: nowISO(),
+      email: null,
+      paid: 0,
+      free_used: 0,
+      referral_code,
+      referral_credits: 0,
+      referred_by: null,
+    });
+    user = qGetUser.get(uid);
+    logEvent(uid, "user_created", { referral_code });
+  }
+  return user as any;
+}
+
+// Referral capture via query param ?ref=CODE
+function captureReferral(req: express.Request, user: any) {
+  const ref = (req.query.ref as string | undefined)?.trim();
+  if (!ref) return;
+
+  // only set once
+  if (user.referred_by && user.referred_by !== "") return;
+
+  const refOwner = db.prepare(`SELECT * FROM users WHERE referral_code = ?`).get(ref);
+  if (refOwner && refOwner.id !== user.id) {
+    qSetReferredBy.run(ref, user.id);
+    // Give 1 credit to new user, and 1 to referrer
+    qIncReferralCredit.run(user.id);
+    qIncReferralCredit.run(refOwner.id);
+    logEvent(user.id, "referral_captured", { ref });
+    logEvent(refOwner.id, "referral_earned", { from_user: user.id });
+  }
+}
+
+function canCreateEstimate(user: any) {
+  const freeLimit = 3;
+  if (user.paid === 1) return { ok: true, reason: "paid" };
+
+  // referral credits can be used first
+  if (Number(user.referral_credits || 0) > 0) return { ok: true, reason: "referral_credit" };
+
+  const used = Number(user.free_used || 0);
+  if (used < freeLimit) return { ok: true, reason: "free" };
+  return { ok: false, reason: "paywall" };
+}
+
+// Email
+const mailer =
+  SMTP_HOST && SMTP_USER && SMTP_PASS
+    ? nodemailer.createTransport({
+        host: SMTP_HOST,
+        port: SMTP_PORT,
+        secure: SMTP_PORT === 465,
+        auth: { user: SMTP_USER, pass: SMTP_PASS },
+      })
+    : null;
+
+async function sendEmail(to: string, subject: string, html: string) {
+  if (!mailer) return; // silently skip if not configured
+  await mailer.sendMail({ from: SMTP_FROM, to, subject, html });
+}
+
+// ---------- SEO PAGES (96) ----------
+const seoTrades = [
+  // 96-ish slugs (you can swap with your exact list—this is ready)
+  "brick-masonry","stone-masonry","tuckpointing","chimney-repair","foundation-repair","retaining-wall",
+  "concrete-driveway","concrete-patio","sidewalk-repair","garage-slab","basement-floor","stamped-concrete",
+  "roof-repair","roof-replacement","siding-repair","window-install","door-install","gutters",
+  "kitchen-remodel","bathroom-remodel","basement-finish","deck-build","fence-install","drywall",
+  "painting-interior","painting-exterior","flooring-install","tile-install","carpentry-trim","framing",
+  "electrical-panel","lighting-install","outlet-install","rewire","plumbing-repair","water-heater",
+  "hvac-repair","hvac-install","ductwork","mini-split",
+  "landscaping","mulch-install","grading","drainage","paver-patio","paver-walkway",
+  "asphalt-repair","sealcoating","parking-lot-striping","excavation","demolition","dumpster-haul",
+  "garage-build","shed-build","pole-barn","addition","new-home","tiny-home",
+  "insulation","spray-foam","attic-venting","mold-remediation","water-damage","fire-damage",
+  "tile-roof","metal-roof","flat-roof","shingle-roof","skylight-install","chimney-liner",
+  "stucco-repair","parging","brick-steps","stone-steps","porch-repair","stairs-rebuild",
+  "interior-demo","commercial-buildout","tenant-improvement","warehouse-fitout","office-remodel","storefront",
+  "concrete-foundation","footings","rebar-install","formwork","concrete-wall","block-wall",
+  "gravel-driveway","culvert-install","snow-removal","pressure-washing","window-cleaning","handyman"
+];
+
+function seoTitle(slug: string) {
+  const name = slug.split("-").map(w => w[0]?.toUpperCase() + w.slice(1)).join(" ");
+  return `${name} Estimate Generator | ProBid AI`;
+}
+function seoBody(slug: string) {
+  const name = slug.split("-").map(w => w[0]?.toUpperCase() + w.slice(1)).join(" ");
+  return htmlPage(seoTitle(slug), `
+    <div class="card">
+      <h1 class="h1">${escapeHtml(name)} Estimates in 60 Seconds</h1>
+      <p class="muted">Generate a client-ready proposal fast. 3 free estimates. No credit card to start.</p>
+      <div class="row">
+        <div class="col">
+          <div class="badge">Most contractors finish this in under 60 seconds</div>
+          <div class="hr"></div>
+          <form method="GET" action="/estimate">
+            <input type="hidden" name="trade" value="${escapeHtml(slug)}"/>
+            <button class="btn" type="submit">Generate Free Estimate</button>
+          </form>
+          <p class="small">Tip: add scope + labor hours + materials. ProBid AI builds a clean proposal PDF.</p>
+        </div>
+        <div class="col">
+          <div class="card" style="background:#0f1220;">
+            <div class="pill">Proposal preview</div>
+            <div class="hr"></div>
+            <div class="small">
+              <b>${escapeHtml(name)} Proposal</b><br/>
+              Scope: Replace/repair with quality materials.<br/>
+              Labor: 18 hrs @ $85/hr<br/>
+              Materials: $650<br/>
+              Total: $2,288 (includes overhead + profit)<br/>
+              <div class="hr"></div>
+              <span class="small">Footer: “Generated by ProBid AI — Get 3 free estimates”</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+// ---------- ROUTES ----------
+app.get("/", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  captureReferral(req, user);
+
+  logEvent(user.id, "page_view", { path: "/" });
+
+  res.send(
+    htmlPage("ProBid AI — AI Estimates & Proposals", `
+    <div class="card">
+      <h1 class="h1">Win More Bids with AI Estimates & Proposals in 60 Seconds</h1>
+      <p class="muted">ProBid AI helps contractors generate accurate estimates and client-ready proposals fast. Built for phones. Built for winning jobs.</p>
+
+      <div class="row">
+        <div class="col">
+          <a class="btn" href="/estimate">Generate Free Estimate</a>
+          <a class="btn2" href="/pricing" style="margin-left:10px;">View Pricing</a>
+          <div class="hr"></div>
+          <div class="grid">
+            <div class="card" style="background:#0f1220;">
+              <b>✅ 3 Free Estimates</b><br/>
+              <span class="small">No credit card needed to start.</span>
+            </div>
+            <div class="card" style="background:#0f1220;">
+              <b>🧾 Branded PDF Proposals</b><br/>
+              <span class="small">Professional output clients trust.</span>
+            </div>
+            <div class="card" style="background:#0f1220;">
+              <b>🔁 Viral Growth Built-In</b><br/>
+              <span class="small">Every proposal markets ProBid AI.</span>
+            </div>
+            <div class="card" style="background:#0f1220;">
+              <b>💳 Stripe Subscriptions</b><br/>
+              <span class="small">Instant upgrade + unlimited estimates.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="card" style="background:#0f1220;">
+            <b>Your account</b>
+            <div class="hr"></div>
+            <div class="small">
+              User ID: ${escapeHtml(user.id)}<br/>
+              Paid: ${user.paid ? "Yes" : "No"}<br/>
+              Free used: ${Number(user.free_used || 0)}/3<br/>
+              Referral credits: ${Number(user.referral_credits || 0)}<br/>
+              Referral link: <a href="/?ref=${escapeHtml(user.referral_code)}">${BASE_URL}/?ref=${escapeHtml(user.referral_code)}</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `)
+  );
+});
+
+// SEO pages
+app.get("/estimate/:trade", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  captureReferral(req, user);
+
+  const trade = String(req.params.trade || "").trim();
+  if (!seoTrades.includes(trade)) {
+    res.status(404).send(htmlPage("Not Found", `<div class="card"><h1 class="h1">Not Found</h1></div>`));
+    return;
+  }
+
+  logEvent(user.id, "seo_page_view", { trade });
+  res.send(seoBody(trade));
+});
+
+// index page listing SEO pages (optional)
+app.get("/trades", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  captureReferral(req, user);
+  logEvent(user.id, "page_view", { path: "/trades" });
+
+  const links = seoTrades
+    .map(t => `<li><a href="/estimate/${t}">${escapeHtml(t.replaceAll("-", " "))}</a></li>`)
+    .join("");
+  res.send(htmlPage("Trades | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Estimate Pages</h1>
+      <p class="muted">These pages drive high-intent SEO traffic.</p>
+      <div class="hr"></div>
+      <ul class="small">${links}</ul>
+    </div>
+  `));
+});
+
+app.get("/pricing", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  captureReferral(req, user);
+  logEvent(user.id, "page_view", { path: "/pricing" });
+
+  res.send(htmlPage("Pricing | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Pricing</h1>
+      <p class="muted">Start free. Upgrade when you’re ready to go unlimited.</p>
+      <div class="row">
+        <div class="col">
+          <div class="card" style="background:#0f1220;">
+            <b>Free</b>
+            <div class="hr"></div>
+            <div class="small">• 3 estimates total<br/>• PDF proposals<br/>• Referral credits</div>
+            <div class="hr"></div>
+            <a class="btn" href="/estimate">Start Free</a>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card" style="background:#0f1220;">
+            <b>Unlimited</b>
+            <div class="hr"></div>
+            <div class="small">• Unlimited estimates<br/>• Priority export<br/>• Pro workflow</div>
+            <div class="hr"></div>
+            <a class="btn" href="/pay">Upgrade (Stripe)</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  `));
+});
+
+app.get("/dashboard", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  captureReferral(req, user);
+  logEvent(user.id, "page_view", { path: "/dashboard" });
+
+  const estimates = qGetEstimates.all(user.id);
+  const rows = estimates
+    .map((e: any) => `
+      <div class="card" style="background:#0f1220; margin-bottom:10px;">
+        <b>${escapeHtml(String(e.trade).replaceAll("-", " "))}</b> • <span class="small">${escapeHtml(e.created_at)}</span>
+        <div class="small">Total: <b>$${Number(e.total).toFixed(2)}</b> • Labor: ${Number(e.labor_hours).toFixed(1)}h @ $${Number(e.labor_rate).toFixed(2)} • Materials: $${Number(e.materials).toFixed(2)}</div>
+        <div class="hr"></div>
+        <a class="btn2" href="/pdf/${escapeHtml(e.id)}">Download PDF</a>
+      </div>
+    `)
+    .join("");
+
+  res.send(htmlPage("Dashboard | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Dashboard</h1>
+      <p class="muted">
+        Free used: <b>${Number(user.free_used || 0)}/3</b> •
+        Referral credits: <b>${Number(user.referral_credits || 0)}</b> •
+        Paid: <b>${user.paid ? "Yes" : "No"}</b>
+      </p>
+      <div class="hr"></div>
+
+      <div class="row">
+        <div class="col">
+          <a class="btn" href="/estimate">Generate Estimate</a>
+          <a class="btn2" href="/pay" style="margin-left:10px;">Upgrade</a>
+          <div class="hr"></div>
+          <div class="small">
+            Your referral link: <a href="/?ref=${escapeHtml(user.referral_code)}">${BASE_URL}/?ref=${escapeHtml(user.referral_code)}</a><br/>
+            Share it — both sides get <b>+1 free estimate credit</b>.
+          </div>
+        </div>
+
+        <div class="col">
+          <form method="POST" action="/set-email" class="card" style="background:#0f1220;">
+            <b>Save email (for proposal delivery)</b>
+            <div class="hr"></div>
+            <label>Email</label>
+            <input name="email" placeholder="you@company.com" value="${escapeHtml(user.email || "")}" />
+            <div style="height:10px;"></div>
+            <button class="btn" type="submit">Save</button>
+            <div class="small" style="margin-top:10px;">We send “Estimate ready” + upgrade reminders (if SMTP configured).</div>
+          </form>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <h3 style="margin:0 0 10px;">Recent estimates</h3>
+      ${rows || `<div class="small muted">No estimates yet. Generate one now.</div>`}
+    </div>
+  `));
+});
+
+app.post("/set-email", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (email && email.includes("@")) {
+    qUpdateUserEmail.run(email, user.id);
+    logEvent(user.id, "email_saved", { email });
+  }
+  res.redirect("/dashboard");
+});
+
+app.get("/estimate", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  captureReferral(req, user);
+
+  const tradePrefill = String(req.query.trade || "").trim();
+
+  logEvent(user.id, "page_view", { path: "/estimate" });
+
+  const eligibility = canCreateEstimate(user);
+  if (!eligibility.ok) {
+    res.redirect("/paywall");
+    return;
+  }
+
+  res.send(htmlPage("Generate Estimate | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Generate an Estimate</h1>
+      <p class="muted">Most contractors finish this in under 60 seconds.</p>
+      <form method="POST" action="/estimate">
+        <div class="grid">
+          <div>
+            <label>Trade</label>
+            <select name="trade">
+              ${seoTrades.map(t => `<option value="${escapeHtml(t)}" ${t===tradePrefill?"selected":""}>${escapeHtml(t.replaceAll("-"," "))}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label>Labor rate ($/hr)</label>
+            <input name="labor_rate" type="number" step="0.01" value="85" />
+          </div>
+        </div>
+
+        <div style="height:10px;"></div>
+
+        <label>Scope (what are you doing?)</label>
+        <textarea name="scope" rows="5" placeholder="Example: Remove damaged brick, install new brick, match mortar, clean up."></textarea>
+
+        <div style="height:10px;"></div>
+
+        <div class="grid">
+          <div>
+            <label>Labor hours</label>
+            <input name="labor_hours" type="number" step="0.1" value="12" />
+          </div>
+          <div>
+            <label>Materials ($)</label>
+            <input name="materials" type="number" step="0.01" value="450" />
+          </div>
+        </div>
+
+        <div style="height:10px;"></div>
+
+        <div class="grid">
+          <div>
+            <label>Overhead (%)</label>
+            <input name="overhead_pct" type="number" step="0.1" value="12" />
+          </div>
+          <div>
+            <label>Profit (%)</label>
+            <input name="profit_pct" type="number" step="0.1" value="18" />
+          </div>
+        </div>
+
+        <div style="height:10px;"></div>
+
+        <div class="grid">
+          <div>
+            <label>Client name (optional)</label>
+            <input name="client_name" placeholder="Client name" />
+          </div>
+          <div>
+            <label>Client email (optional)</label>
+            <input name="client_email" placeholder="client@email.com" />
+          </div>
+        </div>
+
+        <div style="height:14px;"></div>
+        <button class="btn" type="submit">Create Estimate</button>
+        <div class="small" style="margin-top:10px;">
+          Free used: ${Number(user.free_used || 0)}/3 • Referral credits: ${Number(user.referral_credits || 0)} • Paid: ${user.paid ? "Yes" : "No"}
+        </div>
+      </form>
+    </div>
+  `));
+});
+
+app.post("/estimate", async (req, res) => {
+  const user = getOrCreateUser(req, res);
+
+  // refresh user record
+  const fresh = qGetUser.get(user.id) as any;
+
+  const eligibility = canCreateEstimate(fresh);
+  if (!eligibility.ok) {
+    logEvent(fresh.id, "paywall_blocked", { reason: eligibility.reason });
+    res.redirect("/paywall");
+    return;
+  }
+
+  const trade = String(req.body.trade || "general").trim();
+  const scope = String(req.body.scope || "").trim().slice(0, 2000);
+
+  const labor_hours = Number(req.body.labor_hours || 0);
+  const labor_rate = Number(req.body.labor_rate || 0);
+  const materials = Number(req.body.materials || 0);
+  const overhead_pct = Number(req.body.overhead_pct || 0);
+  const profit_pct = Number(req.body.profit_pct || 0);
+
+  const client_name = String(req.body.client_name || "").trim().slice(0, 140);
+  const client_email = String(req.body.client_email || "").trim().slice(0, 140);
+
+  // Very simple pricing math (replace with your AI estimator later)
+  const labor = labor_hours * labor_rate;
+  const subtotal = labor + materials;
+  const overhead = subtotal * (overhead_pct / 100);
+  const profit = subtotal * (profit_pct / 100);
+  const total = Math.max(0, subtotal + overhead + profit);
+
+  const id = uuidv4();
+  qInsertEstimate.run({
+    id,
+    user_id: fresh.id,
+    created_at: nowISO(),
+    trade,
+    scope: scope || "Scope not provided.",
+    labor_hours: isFinite(labor_hours) ? labor_hours : 0,
+    labor_rate: isFinite(labor_rate) ? labor_rate : 0,
+    materials: isFinite(materials) ? materials : 0,
+    overhead_pct: isFinite(overhead_pct) ? overhead_pct : 0,
+    profit_pct: isFinite(profit_pct) ? profit_pct : 0,
+    total: isFinite(total) ? total : 0,
+    client_name: client_name || null,
+    client_email: client_email || null,
+  });
+
+  // consume credit
+  if (eligibility.reason === "referral_credit") {
+    qDecReferralCredit.run(fresh.id);
+  } else if (eligibility.reason === "free") {
+    qIncFreeUsed.run(fresh.id);
+  }
+
+  logEvent(fresh.id, "estimate_created", {
+    trade, total, credit_used: eligibility.reason,
+  });
+
+  // Optional email "Estimate ready"
+  const latestUser = qGetUser.get(fresh.id) as any;
+  const toEmail = client_email || latestUser.email;
+  if (toEmail && toEmail.includes("@")) {
+    try {
+      await sendEmail(
+        toEmail,
+        "Your ProBid AI estimate is ready",
+        `<div style="font-family:system-ui">
+          <h2>Your estimate is ready</h2>
+          <p>Total: <b>$${Number(total).toFixed(2)}</b></p>
+          <p><a href="${BASE_URL}/pdf/${id}">Download the proposal PDF</a></p>
+          <p style="opacity:.75">Generated by ProBid AI • ${BASE_URL}</p>
+        </div>`
+      );
+      logEvent(fresh.id, "email_sent_estimate_ready", { toEmail });
+    } catch (e: any) {
+      logEvent(fresh.id, "email_failed", { msg: String(e?.message || e) });
+    }
+  }
+
+  res.redirect(`/success/${id}`);
+});
+
+app.get("/success/:id", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  const id = String(req.params.id || "");
+  const est = qGetEstimate.get(id, user.id) as any;
+  if (!est) {
+    res.redirect("/dashboard");
+    return;
+  }
+
+  logEvent(user.id, "estimate_success_view", { id });
+
+  res.send(htmlPage("Estimate Ready | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Estimate Ready</h1>
+      <p class="muted">Download your proposal PDF and send it to your client.</p>
+
+      <div class="row">
+        <div class="col">
+          <div class="card" style="background:#0f1220;">
+            <b>${escapeHtml(String(est.trade).replaceAll("-", " "))} Proposal</b>
+            <div class="hr"></div>
+            <div class="small">
+              Total: <b>$${Number(est.total).toFixed(2)}</b><br/>
+              Labor: ${Number(est.labor_hours).toFixed(1)}h @ $${Number(est.labor_rate).toFixed(2)}<br/>
+              Materials: $${Number(est.materials).toFixed(2)}<br/>
+              Overhead: ${Number(est.overhead_pct).toFixed(1)}% • Profit: ${Number(est.profit_pct).toFixed(1)}%
+            </div>
+          </div>
+        </div>
+
+        <div class="col">
+          <a class="btn" href="/pdf/${escapeHtml(est.id)}">Download PDF</a>
+          <a class="btn2" href="/dashboard" style="margin-left:10px;">Back to Dashboard</a>
+          <div class="hr"></div>
+          <div class="small">
+            Viral growth is active: every PDF includes “Generated by ProBid AI — Get 3 free estimates”.<br/>
+            Want unlimited? <a href="/pay">Upgrade</a>.
+          </div>
+        </div>
+      </div>
+    </div>
+  `));
+});
+
+app.get("/paywall", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  logEvent(user.id, "paywall_view", { free_used: user.free_used });
+
+  res.send(htmlPage("Unlock Unlimited | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">You’ve used your 3 free estimates</h1>
+      <p class="muted">
+        Contractors using ProBid AI win more jobs with faster, professional bids.
+        Unlock unlimited estimates instantly.
+      </p>
+      <div class="row">
+        <div class="col">
+          <a class="btn" href="/pay">Unlock Unlimited (Stripe)</a>
+          <div style="height:10px;"></div>
+          <a class="btn2" href="/dashboard">Back to Dashboard</a>
+        </div>
+        <div class="col">
+          <div class="card" style="background:#0f1220;">
+            <b>Get free credits</b>
+            <div class="hr"></div>
+            <div class="small">
+              Share your referral link — both sides get +1 estimate credit.<br/>
+              Your link: <a href="/?ref=${escapeHtml(user.referral_code)}">${BASE_URL}/?ref=${escapeHtml(user.referral_code)}</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `));
+});
+
+// Stripe Checkout
+app.get("/pay", async (req, res) => {
+  const user = getOrCreateUser(req, res);
+  if (!stripe || !STRIPE_PRICE_ID) {
+    res.status(500).send(htmlPage("Stripe not configured", `<div class="card"><h1 class="h1">Stripe not configured</h1><p class="muted">Set STRIPE_SECRET_KEY and STRIPE_PRICE_ID.</p></div>`));
+    return;
+  }
+
+  logEvent(user.id, "stripe_checkout_start");
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+    success_url: `${BASE_URL}/pay/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${BASE_URL}/pay/cancel`,
+    client_reference_id: user.id,
+    metadata: { user_id: user.id },
+  });
+
+  qInsertStripeSession.run({
+    id: uuidv4(),
+    created_at: nowISO(),
+    user_id: user.id,
+    checkout_session_id: session.id,
+    status: "created",
+  });
+
+  res.redirect(303, session.url!);
+});
+
+app.get("/pay/success", async (req, res) => {
+  const user = getOrCreateUser(req, res);
+  const sessionId = String(req.query.session_id || "");
+  if (!stripe || !sessionId) {
+    res.redirect("/dashboard");
+    return;
+  }
+
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  if (session && session.payment_status !== "unpaid") {
+    qUpdateUserPaid.run(1, user.id);
+    qUpdateStripeSessionStatus.run("paid", sessionId);
+    logEvent(user.id, "stripe_checkout_success", { sessionId });
+  }
+
+  res.send(htmlPage("Unlocked | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Unlocked ✅</h1>
+      <p class="muted">Unlimited estimates are now active.</p>
+      <a class="btn" href="/estimate">Generate Estimate</a>
+      <a class="btn2" href="/dashboard" style="margin-left:10px;">Dashboard</a>
+    </div>
+  `));
+});
+
+app.get("/pay/cancel", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  logEvent(user.id, "stripe_checkout_cancel");
+  res.send(htmlPage("Checkout canceled", `
+    <div class="card">
+      <h1 class="h1">Checkout canceled</h1>
+      <p class="muted">No worries. You can upgrade anytime.</p>
+      <a class="btn" href="/dashboard">Back to Dashboard</a>
+    </div>
+  `));
+});
+
+// Optional Stripe webhook (recommended)
+app.post("/stripe/webhook", bodyParser.raw({ type: "application/json" }), (req, res) => {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+    return res.status(400).send("Webhook not configured");
+  }
+  const sig = req.headers["stripe-signature"] as string;
+
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err: any) {
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const userId = (session.metadata?.user_id || session.client_reference_id || "") as string;
+    if (userId) {
+      qUpdateUserPaid.run(1, userId);
+      qUpdateStripeSessionStatus.run("paid", session.id);
+      logEvent(userId, "stripe_webhook_completed", { sessionId: session.id });
+    }
+  }
+
+  res.json({ received: true });
+});
+
+// PDF generator
+app.get("/pdf/:id", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  const id = String(req.params.id || "");
+  const est = qGetEstimate.get(id, user.id) as any;
+  if (!est) {
+    res.status(404).send("Not found");
+    return;
+  }
+
+  logEvent(user.id, "pdf_download", { id });
+
+  const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="proposal-${id}.pdf"`);
+  doc.pipe(res);
+
+  // Header
+  doc.fontSize(20).text("ProBid AI Proposal", { align: "left" });
+  doc.moveDown(0.3);
+  doc.fontSize(11).fillColor("#444").text(`Date: ${new Date(est.created_at).toLocaleString()}`);
+  doc.fillColor("#000").moveDown(1);
+
+  doc.fontSize(14).text(`${String(est.trade).replaceAll("-", " ").toUpperCase()} — Estimate`, { underline: true });
+  doc.moveDown(0.6);
+
+  if (est.client_name) doc.fontSize(11).text(`Client: ${est.client_name}`);
+  if (est.client_email) doc.fontSize(11).text(`Client Email: ${est.client_email}`);
+  doc.moveDown(0.6);
+
+  doc.fontSize(12).text("Scope of Work:", { underline: true });
+  doc.fontSize(11).text(est.scope || "Scope not provided.");
+  doc.moveDown(1);
+
+  // Numbers
+  const labor = Number(est.labor_hours) * Number(est.labor_rate);
+  const materials = Number(est.materials);
+  const subtotal = labor + materials;
+  const overhead = subtotal * (Number(est.overhead_pct) / 100);
+  const profit = subtotal * (Number(est.profit_pct) / 100);
+  const total = Number(est.total);
+
+  doc.fontSize(12).text("Pricing Breakdown:", { underline: true });
+  doc.moveDown(0.4);
+  doc.fontSize(11).text(`Labor: ${Number(est.labor_hours).toFixed(1)} hrs @ $${Number(est.labor_rate).toFixed(2)}/hr  =  $${labor.toFixed(2)}`);
+  doc.fontSize(11).text(`Materials: $${materials.toFixed(2)}`);
+  doc.fontSize(11).text(`Subtotal: $${subtotal.toFixed(2)}`);
+  doc.fontSize(11).text(`Overhead (${Number(est.overhead_pct).toFixed(1)}%): $${overhead.toFixed(2)}`);
+  doc.fontSize(11).text(`Profit (${Number(est.profit_pct).toFixed(1)}%): $${profit.toFixed(2)}`);
+  doc.moveDown(0.6);
+  doc.fontSize(14).text(`TOTAL: $${total.toFixed(2)}`, { underline: true });
+
+  doc.moveDown(1.2);
+  doc.fontSize(10).fillColor("#333").text("Notes: Pricing may change based on site conditions, access, and final material selections.");
+
+  // Viral footer
+  doc.moveDown(2);
+  doc.fontSize(9).fillColor("#666").text(
+    `Generated by ProBid AI — Get 3 free estimates: ${BASE_URL}`,
+    { align: "center" }
+  );
+
+  doc.end();
+});
+
+// Simple “events” viewer (admin-lite, no auth — lock it down if you want)
+app.get("/events", (req, res) => {
+  const user = getOrCreateUser(req, res);
+  const rows = db.prepare(`SELECT * FROM events ORDER BY created_at DESC LIMIT 200`).all();
+  logEvent(user.id, "events_view");
+
+  res.send(htmlPage("Events | ProBid AI", `
+    <div class="card">
+      <h1 class="h1">Recent Events</h1>
+      <p class="muted small">Basic tracking: page views, paywall hits, estimate creates, checkout starts, etc.</p>
+      <div class="hr"></div>
+      <div class="small">
+        ${rows.map((r: any) => `<div style="margin-bottom:10px;">
+          <b>${escapeHtml(r.name)}</b> • ${escapeHtml(r.created_at)} • user: ${escapeHtml(r.user_id || "-")}
+          <div class="small" style="opacity:.8">${escapeHtml(r.meta || "")}</div>
+        </div>`).join("")}
+      </div>
+    </div>
+  `));
+});
+
+// Create canonical redirects for all SEO slugs
+app.get("/s/:slug", (req, res) => {
+  const slug = String(req.params.slug || "").trim();
+  res.redirect(301, `/estimate/${slug}`);
+});
+
+// Generate all 96 SEO routes (server-side)
+seoTrades.forEach((slug) => {
+  app.get(`/seo/${slug}`, (req, res) => {
+    // Optional duplicate path – if you want /seo/... instead of /estimate/...
+    res.redirect(301, `/estimate/${slug}`);
+  });
+});
+
+// Basic robots + sitemap (helps indexing)
+app.get("/robots.txt", (_req, res) => {
+  res.type("text/plain").send(`User-agent: *
+Allow: /
+Sitemap: ${BASE_URL}/sitemap.xml
+`);
+});
+
+app.get("/sitemap.xml", (_req, res) => {
+  res.type("application/xml");
+  const urls = [
+    `${BASE_URL}/`,
+    `${BASE_URL}/pricing`,
+    `${BASE_URL}/estimate`,
+    `${BASE_URL}/dashboard`,
+    `${BASE_URL}/trades`,
+    ...seoTrades.map(t => `${BASE_URL}/estimate/${t}`),
+  ];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls.map(u => `<url><loc>${u}</loc></url>`).join("\n")}
+</urlset>`;
+  res.send(xml);
+});
+
+// 404
+app.use((_req, res) => {
+  res.status(404).send(htmlPage("Not Found", `<div class="card"><h1 class="h1">Not Found</h1><a class="btn" href="/">Go Home</a></div>`));
+});
+
+// ---------- START ----------
+app.listen(PORT, () => {
+  console.log(`✅ ProBid AI running on ${BASE_URL} (port ${PORT})`);
+});

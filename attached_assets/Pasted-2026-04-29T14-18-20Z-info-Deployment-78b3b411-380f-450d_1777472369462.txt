@@ -1,0 +1,81 @@
+2026-04-29T14:18:20Z info: Deployment: 78b3b411-380f-450d-beb2-febb3f10d233
+2026-04-29T14:18:20Z info: Build: 31f9bd94-a255-4104-bc5d-35177ba76908
+2026-04-29T14:18:21Z info: Running Security Scan
+2026-04-29T14:18:23Z info: Security Scan Complete
+2026-04-29T14:18:26Z info: Installing packages
+--> npm install
+
+
+up to date, audited 272 packages in 2s
+
+52 packages are looking for funding
+  run `npm fund` for details
+
+
+4 moderate severity vulnerabilities
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+npm notice
+npm notice New major version of npm available! 10.8.2 -> 11.13.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.13.0
+npm notice To update run: npm install -g npm@11.13.0
+npm notice
+
+2026-04-29T14:18:29Z info: Starting Build
+[deploy-build] step 1/4: install dependencies
+
+
+up to date, audited 272 packages in 771ms
+
+
+[deploy-build] step 2/4: build server + client bundles
+
+
+> probid-core@1.0.0 build:all
+> npm run build:client && npm run build
+
+
+
+> probid-core@1.0.0 build:client
+> cd client && npm run build
+
+
+
+> probid-client@1.0.0 build
+> tsc && vite build
+
+
+vite v6.4.2 building for production...
+
+transforming...
+
+✓ 2234 modules transformed.
+
+rendering chunks...
+
+✓ built in 3.96s
+
+
+> probid-core@1.0.0 build
+> tsc
+
+
+[deploy-build] step 3/4: prepare database (drop renamed table, rename constraints)
+
+(node:187) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[db-prepare] 'messages' table already present — ok
+
+[db-prepare] failed: default for column "created_at" cannot be cast automatically to type bigint

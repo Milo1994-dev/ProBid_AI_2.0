@@ -1,0 +1,161 @@
+Build a Sales Pipeline feature for ProBid AI.
+
+PROJECT GOAL:
+Create a mobile-friendly contractor CRM pipeline where users can create, track, update, and move construction deals from lead to close.
+
+PIPELINE STAGES:
+1. Lead
+2. Contacted
+3. Site Visit Scheduled
+4. Estimate Sent
+5. Negotiation
+6. Won
+7. Lost
+
+Each stage must show:
+- Stage name
+- Deal count
+- Total estimated value for that stage
+
+DEAL CARD:
+Each card should display:
+- Client name
+- Project title
+- Project type
+- Estimated value
+- Current stage
+- Next action
+- Follow-up date
+- Priority: Low, Medium, High
+- Created date
+
+Card actions:
+- View details
+- Edit deal
+- Move stage
+- Mark won
+- Mark lost
+- Delete deal
+
+NEW DEAL FORM:
+Fields:
+- Client name, required
+- Phone number
+- Email
+- Project address
+- Project title, required
+- Project type, required
+- Estimated value, required
+- Description / scope
+- Pipeline stage, required
+- Priority
+- Expected start date
+- Follow-up date
+- Notes
+
+DEAL DETAIL MODAL:
+Show:
+- Contact info
+- Project details
+- Estimated value
+- Stage history
+- Notes
+- Follow-up date
+- Attachments/photos
+- Activity log
+
+Actions:
+- Edit
+- Add note
+- Upload attachment
+- Change stage
+- Convert to estimate
+- Mark won/lost
+
+ANALYTICS TAB:
+Show:
+- Total pipeline value
+- Active deals
+- Won deals
+- Lost deals
+- Win rate
+- Average deal value
+- Value by stage
+- Deals needing follow-up today
+- Overdue follow-ups
+
+DATABASE TABLES:
+
+deals:
+- id uuid primary key
+- user_id uuid required
+- client_name text required
+- phone text
+- email text
+- project_address text
+- project_title text required
+- project_type text required
+- estimated_value numeric required
+- description text
+- stage text required
+- priority text
+- expected_start_date date
+- follow_up_date date
+- status text default active
+- created_at timestamp
+- updated_at timestamp
+
+deal_notes:
+- id uuid primary key
+- deal_id uuid foreign key
+- user_id uuid
+- note text
+- created_at timestamp
+
+deal_attachments:
+- id uuid primary key
+- deal_id uuid foreign key
+- user_id uuid
+- file_url text
+- file_name text
+- file_type text
+- created_at timestamp
+
+deal_activity:
+- id uuid primary key
+- deal_id uuid foreign key
+- user_id uuid
+- activity_type text
+- activity_description text
+- old_value text
+- new_value text
+- created_at timestamp
+
+UX REQUIREMENTS:
+- Mobile-first layout
+- Horizontal scrolling columns on mobile
+- Drag-and-drop cards between stages
+- + New Deal button visible near top
+- Empty state for each stage
+- Loading, saving, and error states
+- Confirm before delete
+- Dark ProBid theme
+- Green primary buttons
+
+ACCEPTANCE CRITERIA:
+- User can create deals
+- User can edit deals
+- User can delete deals
+- User can move deals between stages
+- Deal count updates by stage
+- Dollar value updates by stage
+- Analytics totals are correct
+- Overdue follow-ups are highlighted
+- Data persists after refresh
+- Mobile layout works cleanly
+
+ASSUMPTIONS:
+- App already has authentication
+- User only sees their own deals
+- File upload uses existing storage
+- MVP does not include email/SMS automation yet

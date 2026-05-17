@@ -1,0 +1,751 @@
+/**
+ * PROBID AI / PROCORE INTEGRATION - SINGLE FILE
+ *
+ * What this gives you:
+ * - Procore OAuth install flow
+ * - OAuth callback handler
+ * - Access token + refresh token storage
+ * - Auto refresh on expiry
+ * - List connected companies
+ * - List projects for a company
+ * - Import a Procore project into a ProBid-style normalized object
+ * - Minimal test UI routes
+ *
+ * ENV VARS YOU NEED:
+ * - PORT=5000
+ * - APP_BASE_URL=https://your-app-domain.com
+ * - PROCORE_CLIENT_ID=xxx
+ * - PROCORE_CLIENT_SECRET=xxx
+ * - PROCORE_REDIRECT_URI=https://your-app-domain.com/api/procore/callback
+ * - PROCORE_LOGIN_BASE=https://login.procore.com
+ * - PROCORE_API_BASE=https://api.procore.com
+ * - PROCORE_STATE_SECRET=make_this_long_random_secret
+ *
+ * Optional:
+ * - PROCORE_SCOPES=read_projects read_companies
+ *
+ * Install packages:
+ * npm i express
+ * npm i -D typescript tsx @types/express
+ *
+ * Run:
+ * npx tsx server.ts
+ */
+
+import express, { Request, Response, NextFunction } from "express";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { URLSearchParams } from "node:url";
+
+// -----------------------------
+// Basic app setup
+// -----------------------------
+const app = express();
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+const PORT = Number(process.env.PORT || 5000);
+const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
+const PROCORE_CLIENT_ID = process.env.PROCORE_CLIENT_ID || "";
+const PROCORE_CLIENT_SECRET = process.env.PROCORE_CLIENT_SECRET || "";
+const PROCORE_REDIRECT_URI =
+  process.env.PROCORE_REDIRECT_URI || `${APP_BASE_URL}/api/procore/callback`;
+const PROCORE_LOGIN_BASE = process.env.PROCORE_LOGIN_BASE || "https://login.procore.com";
+const PROCORE_API_BASE = process.env.PROCORE_API_BASE || "https://api.procore.com";
+const PROCORE_STATE_SECRET = process.env.PROCORE_STATE_SECRET || "change-me-now";
+const PROCORE_SCOPES = process.env.PROCORE_SCOPES || "read_projects read_companies";
+
+if (!PROCORE_CLIENT_ID || !PROCORE_CLIENT_SECRET) {
+  console.warn(
+    "[WARN] Missing PROCORE_CLIENT_ID or PROCORE_CLIENT_SECRET. OAuth will not work until set."
+  );
+}
+
+// -----------------------------
+// Simple file storage
+// Replace with DB in production
+// -----------------------------
+const DATA_DIR = path.join(process.cwd(), ".data");
+const STORE_PATH = path.join(DATA_DIR, "procore-store.json");
+
+type ProcoreTokenRecord = {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+  expires_at: number; // epoch ms
+  scope?: string;
+  installed_at: number;
+  raw?: any;
+};
+
+type ImportedProject = {
+  externalSource: "procore";
+  companyId: number;
+  companyName?: string;
+  projectId: number;
+  projectName: string;
+  projectNumber?: string;
+  status?: string;
+  stage?: string;
+  city?: string;
+  stateCode?: string;
+  zip?: string;
+  address?: string;
+  startDate?: string | null;
+  completionDate?: string | null;
+  estimatedValue?: number | null;
+  raw: any;
+};
+
+type StoreShape = {
+  procore: {
+    installed: boolean;
+    connectedCompanyIds: number[];
+    companies: Array<{ id: number; name?: string }>;
+    token?: ProcoreTokenRecord;
+    imports: ImportedProject[];
+  };
+};
+
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(STORE_PATH)) {
+    const initial: StoreShape = {
+      procore: {
+        installed: false,
+        connectedCompanyIds: [],
+        companies: [],
+        imports: [],
+      },
+    };
+    fs.writeFileSync(STORE_PATH, JSON.stringify(initial, null, 2), "utf8");
+  }
+}
+
+function readStore(): StoreShape {
+  ensureDataDir();
+  return JSON.parse(fs.readFileSync(STORE_PATH, "utf8")) as StoreShape;
+}
+
+function writeStore(store: StoreShape) {
+  ensureDataDir();
+  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), "utf8");
+}
+
+// -----------------------------
+// Utilities
+// -----------------------------
+function nowMs() {
+  return Date.now();
+}
+
+function safeJsonParse<T>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function base64Url(input: Buffer | string) {
+  return Buffer.from(input)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function signState(payload: Record<string, unknown>) {
+  const data = base64Url(JSON.stringify(payload));
+  const sig = crypto
+    .createHmac("sha256", PROCORE_STATE_SECRET)
+    .update(data)
+    .digest("base64url");
+  return `${data}.${sig}`;
+}
+
+function verifyState(state: string | undefined | null): Record<string, unknown> | null {
+  if (!state || !state.includes(".")) return null;
+  const [data, sig] = state.split(".");
+  const expected = crypto
+    .createHmac("sha256", PROCORE_STATE_SECRET)
+    .update(data)
+    .digest("base64url");
+
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+
+  const payload = safeJsonParse<Record<string, unknown>>(
+    Buffer.from(data, "base64url").toString("utf8")
+  );
+  if (!payload) return null;
+
+  const ts = Number(payload.ts || 0);
+  const ageMs = nowMs() - ts;
+  if (!Number.isFinite(ts) || ageMs < 0 || ageMs > 10 * 60 * 1000) {
+    return null;
+  }
+
+  return payload;
+}
+
+function requireConfigured() {
+  const missing: string[] = [];
+  if (!PROCORE_CLIENT_ID) missing.push("PROCORE_CLIENT_ID");
+  if (!PROCORE_CLIENT_SECRET) missing.push("PROCORE_CLIENT_SECRET");
+  if (!PROCORE_REDIRECT_URI) missing.push("PROCORE_REDIRECT_URI");
+  if (!PROCORE_STATE_SECRET || PROCORE_STATE_SECRET === "change-me-now") {
+    missing.push("PROCORE_STATE_SECRET");
+  }
+  if (missing.length) {
+    const err = new Error(`Missing required env vars: ${missing.join(", ")}`);
+    (err as any).status = 500;
+    throw err;
+  }
+}
+
+function getAuthorizeUrl() {
+  const params = new URLSearchParams({
+    client_id: PROCORE_CLIENT_ID,
+    response_type: "code",
+    redirect_uri: PROCORE_REDIRECT_URI,
+    scope: PROCORE_SCOPES,
+    state: signState({
+      ts: nowMs(),
+      nonce: crypto.randomBytes(12).toString("hex"),
+      source: "probid-procore-install",
+    }),
+  });
+
+  return `${PROCORE_LOGIN_BASE}/oauth/authorize?${params.toString()}`;
+}
+
+async function procoreTokenRequest(form: Record<string, string>) {
+  const body = new URLSearchParams(form);
+
+  const res = await fetch(`${PROCORE_LOGIN_BASE}/oauth/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+
+  const text = await res.text();
+  const data = safeJsonParse<any>(text) ?? { raw: text };
+
+  if (!res.ok) {
+    throw new Error(`Procore token request failed: ${res.status} ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+function saveTokenResponse(tokenData: any) {
+  const store = readStore();
+  const expiresInSec = Number(tokenData.expires_in || 3600);
+
+  store.procore.token = {
+    access_token: tokenData.access_token,
+    refresh_token: tokenData.refresh_token,
+    token_type: tokenData.token_type,
+    scope: tokenData.scope,
+    expires_at: nowMs() + expiresInSec * 1000 - 60_000,
+    installed_at: nowMs(),
+    raw: tokenData,
+  };
+  store.procore.installed = true;
+
+  writeStore(store);
+}
+
+async function refreshProcoreTokenIfNeeded() {
+  const store = readStore();
+  const token = store.procore.token;
+
+  if (!token) {
+    throw new Error("No Procore token installed.");
+  }
+
+  if (token.expires_at > nowMs()) {
+    return token.access_token;
+  }
+
+  const refreshed = await procoreTokenRequest({
+    grant_type: "refresh_token",
+    client_id: PROCORE_CLIENT_ID,
+    client_secret: PROCORE_CLIENT_SECRET,
+    refresh_token: token.refresh_token,
+  });
+
+  saveTokenResponse({
+    ...refreshed,
+    refresh_token: refreshed.refresh_token || token.refresh_token,
+  });
+
+  return readStore().procore.token!.access_token;
+}
+
+async function procoreFetch(
+  endpoint: string,
+  opts?: {
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    companyId?: number;
+    body?: unknown;
+    extraHeaders?: Record<string, string>;
+  }
+) {
+  const accessToken = await refreshProcoreTokenIfNeeded();
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json",
+    ...(opts?.extraHeaders || {}),
+  };
+
+  if (opts?.companyId) {
+    headers["Procore-Company-Id"] = String(opts.companyId);
+  }
+
+  if (opts?.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const res = await fetch(`${PROCORE_API_BASE}${endpoint}`, {
+    method: opts?.method || "GET",
+    headers,
+    body: opts?.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+
+  const text = await res.text();
+  const data = safeJsonParse<any>(text) ?? { raw: text };
+
+  if (!res.ok) {
+    throw new Error(`Procore API failed: ${res.status} ${endpoint} ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+function normalizeProject(raw: any, companyId: number, companyName?: string): ImportedProject {
+  const addrParts = [
+    raw?.address,
+    raw?.city,
+    raw?.state_code || raw?.state,
+    raw?.zip || raw?.postal_code,
+  ].filter(Boolean);
+
+  return {
+    externalSource: "procore",
+    companyId,
+    companyName,
+    projectId: Number(raw?.id),
+    projectName: String(raw?.name || "Untitled Project"),
+    projectNumber: raw?.project_number || raw?.number || undefined,
+    status: raw?.status || raw?.project_status || undefined,
+    stage: raw?.stage || raw?.project_stage || undefined,
+    city: raw?.city || undefined,
+    stateCode: raw?.state_code || raw?.state || undefined,
+    zip: raw?.zip || raw?.postal_code || undefined,
+    address: addrParts.join(", ") || undefined,
+    startDate: raw?.start_date || null,
+    completionDate: raw?.completion_date || raw?.estimated_completion_date || null,
+    estimatedValue:
+      typeof raw?.estimated_value === "number"
+        ? raw.estimated_value
+        : typeof raw?.projected_value === "number"
+        ? raw.projected_value
+        : null,
+    raw,
+  };
+}
+
+function asyncRoute(
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<any>
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    fn(req, res, next).catch(next);
+  };
+}
+
+// -----------------------------
+// Health
+// -----------------------------
+app.get("/health", (_req, res) => {
+  const store = readStore();
+  res.json({
+    ok: true,
+    app: "probid-procore-integration",
+    installed: store.procore.installed,
+    connectedCompanies: store.procore.connectedCompanyIds.length,
+  });
+});
+
+// -----------------------------
+// Minimal UI
+// -----------------------------
+app.get("/", (_req, res) => {
+  res.type("html").send(`
+    <html>
+      <head>
+        <title>ProBid AI + Procore</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
+          .btn { display:inline-block; background:#111; color:#fff; padding:12px 18px; text-decoration:none; border-radius:10px; }
+          pre { background:#f6f6f6; padding:16px; border-radius:12px; overflow:auto; }
+          .card { border:1px solid #ddd; border-radius:16px; padding:18px; margin-bottom:18px; }
+        </style>
+      </head>
+      <body>
+        <h1>ProBid AI + Procore Integration</h1>
+        <div class="card">
+          <p>Connect your Procore account, pull companies, view projects, and import project data into ProBid.</p>
+          <p><a class="btn" href="/api/procore/install">Connect Procore</a></p>
+        </div>
+
+        <div class="card">
+          <h3>Useful endpoints</h3>
+          <pre>
+GET  /api/procore/status
+GET  /api/procore/companies
+GET  /api/procore/projects?companyId=123
+POST /api/procore/import-project
+Body: { "companyId": 123, "projectId": 456 }
+          </pre>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// -----------------------------
+// Procore OAuth routes
+// -----------------------------
+app.get(
+  "/api/procore/install",
+  asyncRoute(async (_req, res) => {
+    requireConfigured();
+    const url = getAuthorizeUrl();
+    res.redirect(url);
+  })
+);
+
+app.get(
+  "/api/procore/callback",
+  asyncRoute(async (req, res) => {
+    requireConfigured();
+
+    const code = String(req.query.code || "");
+    const state = String(req.query.state || "");
+    const error = String(req.query.error || "");
+    const errorDescription = String(req.query.error_description || "");
+
+    if (error) {
+      return res.status(400).type("html").send(`
+        <h1>Procore connection failed</h1>
+        <p>${escapeHtml(error)}</p>
+        <p>${escapeHtml(errorDescription)}</p>
+      `);
+    }
+
+    if (!code) {
+      return res.status(400).type("html").send(`
+        <h1>Missing authorization code</h1>
+        <p>Procore did not return a code.</p>
+      `);
+    }
+
+    const verified = verifyState(state);
+    if (!verified) {
+      return res.status(400).type("html").send(`
+        <h1>Invalid or expired state</h1>
+        <p>Security validation failed. Start the install again.</p>
+      `);
+    }
+
+    const tokenData = await procoreTokenRequest({
+      grant_type: "authorization_code",
+      client_id: PROCORE_CLIENT_ID,
+      client_secret: PROCORE_CLIENT_SECRET,
+      code,
+      redirect_uri: PROCORE_REDIRECT_URI,
+    });
+
+    saveTokenResponse(tokenData);
+
+    // Pull visible companies immediately so the app is ready to use.
+    const companies = await procoreFetch("/rest/v1.0/companies");
+    const store = readStore();
+
+    store.procore.companies = Array.isArray(companies)
+      ? companies.map((c: any) => ({
+          id: Number(c.id),
+          name: c.name || c.company_name || `Company ${c.id}`,
+        }))
+      : [];
+
+    store.procore.connectedCompanyIds = store.procore.companies.map((c) => c.id);
+    writeStore(store);
+
+    res.type("html").send(`
+      <html>
+        <head><title>Procore Connected</title></head>
+        <body style="font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px;">
+          <h1>Procore connected successfully</h1>
+          <p>Your ProBid app is now authorized with Procore.</p>
+          <p><a href="/api/procore/status">View connection status</a></p>
+          <p><a href="/api/procore/companies">View connected companies</a></p>
+        </body>
+      </html>
+    `);
+  })
+);
+
+// -----------------------------
+// Procore API routes
+// -----------------------------
+app.get(
+  "/api/procore/status",
+  asyncRoute(async (_req, res) => {
+    const store = readStore();
+    const token = store.procore.token;
+
+    res.json({
+      ok: true,
+      installed: store.procore.installed,
+      tokenPresent: !!token,
+      tokenExpiresAt: token?.expires_at || null,
+      tokenExpiresInSeconds: token ? Math.max(0, Math.floor((token.expires_at - nowMs()) / 1000)) : null,
+      connectedCompanies: store.procore.companies,
+      importsCount: store.procore.imports.length,
+    });
+  })
+);
+
+app.get(
+  "/api/procore/companies",
+  asyncRoute(async (_req, res) => {
+    const companies = await procoreFetch("/rest/v1.0/companies");
+
+    const store = readStore();
+    store.procore.companies = Array.isArray(companies)
+      ? companies.map((c: any) => ({
+          id: Number(c.id),
+          name: c.name || c.company_name || `Company ${c.id}`,
+        }))
+      : [];
+    store.procore.connectedCompanyIds = store.procore.companies.map((c) => c.id);
+    writeStore(store);
+
+    res.json({
+      ok: true,
+      companies: store.procore.companies,
+    });
+  })
+);
+
+app.get(
+  "/api/procore/projects",
+  asyncRoute(async (req, res) => {
+    const companyId = Number(req.query.companyId);
+    if (!companyId) {
+      return res.status(400).json({ ok: false, error: "Missing required query param: companyId" });
+    }
+
+    const projects = await procoreFetch(`/rest/v1.0/companies/${companyId}/projects`, {
+      companyId,
+    });
+
+    res.json({
+      ok: true,
+      companyId,
+      count: Array.isArray(projects) ? projects.length : 0,
+      projects,
+    });
+  })
+);
+
+app.post(
+  "/api/procore/import-project",
+  asyncRoute(async (req, res) => {
+    const companyId = Number(req.body?.companyId);
+    const projectId = Number(req.body?.projectId);
+
+    if (!companyId || !projectId) {
+      return res.status(400).json({
+        ok: false,
+        error: "companyId and projectId are required",
+      });
+    }
+
+    const store = readStore();
+    const company = store.procore.companies.find((c) => c.id === companyId);
+
+    const project = await procoreFetch(`/rest/v1.0/projects/${projectId}`, {
+      companyId,
+    });
+
+    const normalized = normalizeProject(project, companyId, company?.name);
+
+    const existingIdx = store.procore.imports.findIndex(
+      (p) => p.companyId === companyId && p.projectId === projectId
+    );
+
+    if (existingIdx >= 0) {
+      store.procore.imports[existingIdx] = normalized;
+    } else {
+      store.procore.imports.push(normalized);
+    }
+
+    writeStore(store);
+
+    res.json({
+      ok: true,
+      imported: normalized,
+    });
+  })
+);
+
+app.get(
+  "/api/procore/imports",
+  asyncRoute(async (_req, res) => {
+    const store = readStore();
+    res.json({
+      ok: true,
+      imports: store.procore.imports,
+    });
+  })
+);
+
+// -----------------------------
+// Example: turn imported Procore project
+// into a ProBid draft estimate payload
+// -----------------------------
+app.post(
+  "/api/procore/make-estimate-draft",
+  asyncRoute(async (req, res) => {
+    const companyId = Number(req.body?.companyId);
+    const projectId = Number(req.body?.projectId);
+
+    if (!companyId || !projectId) {
+      return res.status(400).json({
+        ok: false,
+        error: "companyId and projectId are required",
+      });
+    }
+
+    const store = readStore();
+    const found = store.procore.imports.find(
+      (p) => p.companyId === companyId && p.projectId === projectId
+    );
+
+    if (!found) {
+      return res.status(404).json({
+        ok: false,
+        error: "Project not imported yet. Call /api/procore/import-project first.",
+      });
+    }
+
+    const estimateDraft = {
+      source: "procore",
+      externalProjectId: found.projectId,
+      companyId: found.companyId,
+      customerName: found.projectName,
+      jobName: found.projectName,
+      address: found.address || "",
+      city: found.city || "",
+      state: found.stateCode || "",
+      zip: found.zip || "",
+      status: found.status || "Imported",
+      projectStage: found.stage || "",
+      notes: `Imported from Procore project ${found.projectId}`,
+      estimatedJobValue: found.estimatedValue ?? null,
+      lineItems: [],
+      aiPrefill: {
+        projectName: found.projectName,
+        projectNumber: found.projectNumber || "",
+        projectStage: found.stage || "",
+        location: found.address || "",
+      },
+      rawSource: found.raw,
+    };
+
+    res.json({
+      ok: true,
+      estimateDraft,
+    });
+  })
+);
+
+// -----------------------------
+// Helper route for quick browser testing
+// -----------------------------
+app.get(
+  "/api/procore/demo",
+  asyncRoute(async (_req, res) => {
+    const store = readStore();
+    const html = `
+      <html>
+        <head>
+          <title>Procore Demo</title>
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+            .card { border:1px solid #ddd; border-radius:16px; padding:18px; margin-bottom:18px; }
+            code, pre { background:#f6f6f6; padding:4px 6px; border-radius:8px; }
+          </style>
+        </head>
+        <body>
+          <h1>ProBid + Procore Demo</h1>
+          <div class="card">
+            <h3>Status</h3>
+            <pre>${escapeHtml(JSON.stringify({
+              installed: store.procore.installed,
+              companies: store.procore.companies,
+              imports: store.procore.imports.length
+            }, null, 2))}</pre>
+          </div>
+          <div class="card">
+            <h3>Next steps</h3>
+            <ol>
+              <li><a href="/api/procore/install">Connect Procore</a></li>
+              <li>Call <code>/api/procore/companies</code></li>
+              <li>Call <code>/api/procore/projects?companyId=YOUR_COMPANY_ID</code></li>
+              <li>POST <code>/api/procore/import-project</code></li>
+            </ol>
+          </div>
+        </body>
+      </html>
+    `;
+    res.type("html").send(html);
+  })
+);
+
+// -----------------------------
+// Error handling
+// -----------------------------
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error("[ERROR]", err);
+
+  const status = Number(err?.status || 500);
+  res.status(status).json({
+    ok: false,
+    error: err?.message || "Internal server error",
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`ProBid Procore integration running on ${APP_BASE_URL}`);
+  console.log(`Open: ${APP_BASE_URL}`);
+});
+
+// -----------------------------
+// small helpers
+// -----------------------------
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}

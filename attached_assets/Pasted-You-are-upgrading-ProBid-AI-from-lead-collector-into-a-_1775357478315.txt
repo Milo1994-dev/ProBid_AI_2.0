@@ -1,0 +1,513 @@
+You are upgrading ProBid AI from “lead collector” into a real conversion engine.
+
+GOAL
+Turn scraped leads + outbound email/SMS into booked demos, trials, and paid subscriptions.
+Do not break existing app behavior. Keep current scraper, queue, admin, auth, and billing working.
+Use the existing stack and patterns already in this repo.
+
+PRIMARY OBJECTIVES
+1. Add a multi-step conversion engine
+2. Add reply tracking + lead stage management
+3. Add auto follow-ups across email + SMS
+4. Add lead scoring so hottest leads get hit first
+5. Add admin dashboard controls for outreach + conversions
+6. Add compliance safeguards (opt-out, quiet hours, rate limits)
+7. Make the whole thing production-ready on Replit
+
+BUSINESS LOGIC TO BUILD
+
+A) LEAD STAGES
+Create or extend DB so every lead has:
+- id
+- businessName
+- contactName
+- email
+- phone
+- city
+- state
+- trade
+- website
+- source
+- status
+- stage
+- score
+- owner
+- notes
+- tags
+- lastContactedAt
+- nextContactAt
+- lastReplyAt
+- lastOpenedAt
+- openCount
+- clickCount
+- emailBounce
+- smsOptOut
+- emailOptOut
+- doNotContact
+- timezone
+- createdAt
+- updatedAt
+
+Use these stages:
+- new
+- queued
+- contacted
+- opened
+- clicked
+- replied
+- interested
+- trial_started
+- subscribed
+- no_response
+- do_not_contact
+
+B) LEAD SCORING
+Build a scoring engine that updates score automatically.
+Suggested scoring:
++20 if phone exists
++15 if email exists
++10 if website exists
++15 if trade matches core ICP (masonry, roofing, concrete, remodeling, general contractor)
++10 if city/state is in target service regions
++20 if email opened
++25 if clicked
++40 if replied
+-50 if unsubscribed / opt-out / invalid
+-20 if bounced
+-15 if already contacted too many times
+Cap score between 0 and 100
+
+Priority buckets:
+- hot: 70+
+- warm: 40-69
+- cold: 0-39
+
+C) OUTREACH SEQUENCES
+Build 3 sequences:
+1. email_first
+2. sms_first
+3. hybrid
+
+Default sequence = hybrid when both email and phone exist.
+If only email exists -> email_first
+If only phone exists -> sms_first
+
+SEQUENCE RULES
+
+HYBRID:
+Day 0: Intro email
+Day 1: SMS nudge
+Day 3: Follow-up email
+Day 5: Final SMS
+Day 8: Breakup email
+Then mark as no_response if no opens/clicks/replies
+
+EMAIL_FIRST:
+Day 0: Intro email
+Day 2: Follow-up email
+Day 5: Case study/value email
+Day 8: Breakup email
+
+SMS_FIRST:
+Day 0: Intro SMS
+Day 2: Follow-up SMS
+Day 5: Last chance SMS
+
+Stop all future steps immediately if:
+- reply detected
+- subscribed
+- opted out
+- hard bounce
+- doNotContact = true
+
+D) MESSAGE TEMPLATES
+Create editable templates in DB or config so admin can edit later.
+Use variables:
+{{contactName}}
+{{businessName}}
+{{trade}}
+{{city}}
+{{state}}
+{{bookingLink}}
+{{unsubscribeLink}}
+{{optOutText}}
+
+DEFAULT EMAIL TEMPLATES
+
+Template: intro_email
+Subject: Quick question about your estimates
+Body:
+Hi {{contactName}},
+
+I help {{trade}} contractors speed up estimating using AI.
+
+With ProBid AI, you can turn job photos + job details into fast estimate drafts, helping you quote work quicker and close more jobs.
+
+Would you be open to seeing a quick example?
+
+{{bookingLink}}
+
+Reply here if you want me to send one over.
+
+– ProBid AI
+
+To stop emails, click here: {{unsubscribeLink}}
+
+Template: followup_email
+Subject: Following up on estimating help
+Body:
+Hi {{contactName}},
+
+Just following up in case estimating is still eating up time in your business.
+
+ProBid AI helps contractors create estimate drafts faster from photos and job details.
+
+If you'd like, I can send a quick example or you can check it out here:
+{{bookingLink}}
+
+– ProBid AI
+
+Unsubscribe: {{unsubscribeLink}}
+
+Template: value_email
+Subject: Save time on quotes
+Body:
+Hi {{contactName}},
+
+A lot of contractors lose jobs simply because quotes go out too slow.
+
+ProBid AI is built to help you quote faster and stay on top of leads without spending extra hours writing estimates manually.
+
+Want to try it?
+{{bookingLink}}
+
+– ProBid AI
+
+Unsubscribe: {{unsubscribeLink}}
+
+Template: breakup_email
+Subject: Should I close your file?
+Body:
+Hi {{contactName}},
+
+I haven’t heard back, so I’ll assume this isn’t a priority right now.
+
+If you ever want to speed up estimates and quoting, ProBid AI is here:
+{{bookingLink}}
+
+If you'd rather not hear from us again, use this link:
+{{unsubscribeLink}}
+
+DEFAULT SMS TEMPLATES
+Keep SMS short and compliant. Include opt-out wording where needed.
+
+Template: intro_sms
+Body:
+Hi {{contactName}}, this is ProBid AI. We help {{trade}} contractors create estimate drafts faster from photos/job details. Want a quick example? {{bookingLink}} Reply STOP to opt out.
+
+Template: followup_sms
+Body:
+Just following up — ProBid AI can help speed up your estimating workflow. Want to see how it works? {{bookingLink}} Reply STOP to opt out.
+
+Template: final_sms
+Body:
+Last note from ProBid AI — if faster estimates would help your business, here’s the link: {{bookingLink}} Reply STOP to opt out.
+
+E) REPLY HANDLING
+Build reply detection flow.
+
+EMAIL:
+- Use existing email provider webhook/events if available
+- Capture opens, clicks, bounces, replies if provider supports it
+- Update stage automatically:
+  opened -> clicked -> replied
+- When reply detected:
+  - cancel queued follow-ups
+  - set stage = replied
+  - create admin notification
+  - add note/log entry
+
+SMS:
+- Add Twilio inbound webhook route
+- Parse inbound STOP / STOPALL / UNSUBSCRIBE / CANCEL / END / QUIT
+- If stop keyword received:
+  - smsOptOut = true
+  - doNotContact = true if only SMS is available
+  - cancel future SMS
+- For normal replies:
+  - stage = replied
+  - lastReplyAt = now
+  - cancel pending steps
+  - admin notification
+
+F) BOOKING + CTA
+If no booking page exists, create a simple CTA route/page:
+- /demo or /book
+- headline
+- short explainer
+- email capture
+- CTA to start trial / signup
+- optionally embed calendar if one already exists
+If signup route exists already, use that as bookingLink.
+Set bookingLink from env or config:
+- APP_BASE_URL
+- CONVERSION_CTA_URL fallback to /signup or /pricing
+
+G) CONVERSION AUTOMATIONS
+Add automation jobs:
+
+1. scoreLeadsJob
+- runs hourly
+- updates all scores
+
+2. queueOutreachJob
+- runs every 15 minutes
+- selects eligible leads
+- obeys rate limits
+- only contacts leads with valid contact methods
+- schedules next step
+
+3. sendDueOutreachJob
+- runs every 5 minutes
+- sends due email/SMS actions
+- records success/failure
+- retries soft failures
+- marks bounces/invalids
+
+4. staleLeadRecoveryJob
+- runs daily
+- reclassifies old non-responders
+- surfaces hot opened/clicked leads for manual review
+
+H) RATE LIMITS + SAFETY
+Must add admin-configurable limits:
+- max emails per day
+- max SMS per day
+- max touches per lead
+- quiet hours start/end per lead timezone
+- no SMS before 8am or after 8pm local lead time
+- no duplicate contact within 24h
+- no sends to opted-out leads
+- no sends if doNotContact = true
+
+Add default safe values:
+- max emails per day = 50
+- max SMS per day = 25
+- max touches per lead = 5
+
+I) ADMIN DASHBOARD
+Add or extend admin page with:
+1. Conversion overview cards:
+- new leads today
+- contacted today
+- opens today
+- clicks today
+- replies today
+- interested
+- trials started
+- subscribers
+- conversion rate
+- unsubscribe rate
+
+2. Funnel view:
+- new
+- contacted
+- opened
+- clicked
+- replied
+- trial_started
+- subscribed
+
+3. Sequence controls:
+- enable/disable email
+- enable/disable SMS
+- choose default sequence
+- daily limits
+- quiet hours
+- CTA link
+- template editor
+
+4. Lead table:
+- score
+- stage
+- next contact
+- last touch
+- source
+- city/state
+- trade
+- reply status
+- manual actions:
+  - pause
+  - resume
+  - mark interested
+  - mark subscribed
+  - add note
+  - send test message
+  - resend next step
+
+5. Activity feed:
+- email sent
+- sms sent
+- opened
+- clicked
+- replied
+- unsubscribed
+- bounced
+- subscribed
+
+J) ANALYTICS
+Track:
+- sent count by channel
+- delivery count
+- open rate
+- click rate
+- reply rate
+- trial start rate
+- paid conversion rate
+- per-template performance
+- per-trade performance
+- per-city performance
+- per-source performance
+
+Add endpoints for dashboard analytics.
+Do not fake stats. Use real DB-backed values only.
+
+K) DATABASE TABLES
+Create or extend tables such as:
+- leads
+- outreach_sequences
+- outreach_templates
+- outreach_steps
+- outreach_events
+- outreach_settings
+- lead_notes
+- lead_tags
+
+Minimum outreach_steps fields:
+- id
+- leadId
+- channel (email/sms)
+- templateKey
+- scheduledFor
+- sentAt
+- status (queued/sent/failed/cancelled/replied/skipped)
+- providerMessageId
+- error
+- createdAt
+- updatedAt
+
+Minimum outreach_events fields:
+- id
+- leadId
+- type (sent/open/click/reply/bounce/unsubscribe/stage_change)
+- channel
+- metadata JSON
+- createdAt
+
+L) WEBHOOKS / ROUTES
+Implement routes as needed:
+- POST /api/webhooks/twilio/inbound
+- POST /api/webhooks/email/events
+- GET /unsubscribe/:token
+- GET /api/admin/conversion/metrics
+- GET /api/admin/conversion/funnel
+- GET /api/admin/conversion/leads
+- POST /api/admin/conversion/settings
+- POST /api/admin/conversion/templates
+- POST /api/admin/conversion/lead/:id/pause
+- POST /api/admin/conversion/lead/:id/resume
+- POST /api/admin/conversion/lead/:id/mark-interested
+- POST /api/admin/conversion/lead/:id/mark-subscribed
+- POST /api/admin/conversion/lead/:id/send-test
+
+M) ENV / SECRETS
+Support and document:
+- TWILIO_ACCOUNT_SID
+- TWILIO_AUTH_TOKEN
+- TWILIO_MESSAGING_SERVICE_SID
+- TWILIO_PHONE_NUMBER (optional fallback)
+- APP_BASE_URL
+- CONVERSION_CTA_URL
+- EMAIL_FROM
+- EMAIL_PROVIDER_WEBHOOK_SECRET (if applicable)
+
+Do not hardcode secrets.
+Do not expose secrets to client.
+
+N) TWILIO RULES
+For US delivery:
+- prefer Messaging Service SID
+- do not use alphanumeric sender ID as From for US texting
+- include STOP opt-out language in SMS where applicable
+- handle inbound STOP keywords properly
+- if Messaging Service is configured, send with it
+- if not, fallback to Twilio number only
+
+O) IMPLEMENTATION REQUIREMENTS
+- Keep code clean and modular
+- Reuse existing DB/ORM patterns
+- Reuse existing auth/admin middleware
+- Reuse current scheduler/cron patterns if they exist
+- Add migrations if needed
+- No placeholder TODO logic
+- No mock conversion metrics in production flows
+- No breaking changes to existing lead scraper or email drip
+- If old outreach system exists, migrate it into this new engine rather than creating duplicate conflicting logic
+
+P) UX / COPY
+Keep all UI copy simple and professional.
+Tone: contractor-friendly, clear, direct, not hypey.
+
+Q) ACCEPTANCE TESTS
+System is only complete if all are true:
+
+1. New lead enters DB and gets a score automatically
+2. Lead is assigned a sequence based on available contact info
+3. First touch is queued correctly
+4. Due email sends successfully
+5. Due SMS sends successfully through Twilio Messaging Service
+6. Opens/clicks/replies update lead stage
+7. STOP reply opts the lead out of SMS
+8. Future queued touches are cancelled on reply
+9. Dashboard shows real funnel counts
+10. Admin can edit templates/settings
+11. Admin can pause/resume a lead
+12. Quiet hours prevent bad send times
+13. Daily limits are obeyed
+14. Existing app features still work
+15. Build passes and app runs cleanly on Replit
+
+R) FINAL DELIVERABLES
+When finished, output:
+1. What files were created/changed
+2. What DB changes were made
+3. What env vars are required
+4. What URLs/routes were added
+5. Exactly how to test:
+   - add a lead
+   - force queue
+   - send email
+   - send sms
+   - simulate reply
+   - simulate opt-out
+   - verify funnel stats
+6. Any remaining risks
+
+S) EXECUTION ORDER
+Follow this order:
+1. inspect existing codebase and current outreach logic
+2. design schema changes
+3. implement backend models/services/jobs/webhooks
+4. implement admin APIs
+5. implement dashboard UI
+6. wire templates/settings
+7. test end-to-end
+8. fix errors
+9. deliver summary
+
+IMPORTANT
+- Make this real, not a mockup
+- Favor production-safe defaults
+- Do not remove current working scraper
+- Do not disable current Twilio/email setup
+- Upgrade the system into a conversion engine that can actually turn leads into paid users

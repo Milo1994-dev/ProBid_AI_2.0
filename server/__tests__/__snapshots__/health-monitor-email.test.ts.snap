@@ -1,0 +1,41 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderGrowthAlertEmail — threshold row > omits the Current row but still renders Thresholds when currentValue is undefined 1`] = `
+"
+<div style="font-family:Arial,sans-serif;background:#0a0e1a;color:#e8f0ff;padding:32px">
+  <h2 style="color:#f59e0b;margin:0 0 16px">Growth Engine — Test Subsystem</h2>
+  <p style="color:#94a3b8;margin:0 0 12px">Severity: <strong style="color:#f59e0b">WARNING</strong></p>
+  <ul style="color:#e8f0ff;margin:0 0 16px;padding-left:18px">
+    <li>Something went wrong</li>
+  </ul>
+  <table style="font-size:13px;color:#94a3b8;border-collapse:collapse">
+    <tr><td style="padding:2px 12px 2px 0">Last success</td><td>never</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">Last failure</td><td>—</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">24h throughput</td><td>0</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">24h failures</td><td>0</td></tr>
+    
+    <tr><td style="padding:2px 12px 2px 0">Thresholds</td><td>⚠ 10 / 🔴 25 resets/hr</td></tr>
+  </table>
+  <p style="color:#94a3b8;font-size:12px;margin-top:20px">Runbook: /documents/runbook-growth-health.md · One alert per incident — no re-fire until this is resolved (or escalates to red).</p>
+</div>"
+`;
+
+exports[`renderGrowthAlertEmail — threshold row > renders the Current row when meta.thresholds.currentValue is set 1`] = `
+"
+<div style="font-family:Arial,sans-serif;background:#0a0e1a;color:#e8f0ff;padding:32px">
+  <h2 style="color:#f59e0b;margin:0 0 16px">Growth Engine — Test Subsystem</h2>
+  <p style="color:#94a3b8;margin:0 0 12px">Severity: <strong style="color:#f59e0b">WARNING</strong></p>
+  <ul style="color:#e8f0ff;margin:0 0 16px;padding-left:18px">
+    <li>Something went wrong</li>
+  </ul>
+  <table style="font-size:13px;color:#94a3b8;border-collapse:collapse">
+    <tr><td style="padding:2px 12px 2px 0">Last success</td><td>never</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">Last failure</td><td>—</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">24h throughput</td><td>0</td></tr>
+    <tr><td style="padding:2px 12px 2px 0">24h failures</td><td>0</td></tr>
+    
+    <tr><td style="padding:2px 12px 2px 0">Current</td><td><strong>17 resets/hr</strong></td></tr><tr><td style="padding:2px 12px 2px 0">Thresholds</td><td>⚠ 10 / 🔴 25 resets/hr</td></tr>
+  </table>
+  <p style="color:#94a3b8;font-size:12px;margin-top:20px">Runbook: /documents/runbook-growth-health.md · One alert per incident — no re-fire until this is resolved (or escalates to red).</p>
+</div>"
+`;

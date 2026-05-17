@@ -1,0 +1,1090 @@
+"""
+ProBid AI — ALL-IN-ONE “Money Machine” (Single-file app for Replit)
+
+Includes:
+✅ Auth (email+password)
+✅ Pricing tiers (Free/Pro/Business/Pro+)
+✅ Stripe Checkout + Webhook (optional, graceful if stripe not installed)
+✅ Viral loop: Branded PDF estimate w/ referral link + QR (QR optional)
+✅ Affiliate system: codes, click tracking, referral attribution, recurring commissions
+✅ Admin dashboard: users, referrals, earnings, payout exports
+✅ SEO page factory: /estimate/<service>-cost-<state> auto-pages that funnel to signup
+✅ Automation stubs: daily SEO generation + content queue (hooks for posting later)
+
+How to run on Replit:
+1) Create a Python repl
+2) Add this file as main.py
+3) In Shell:  pip install fastapi uvicorn python-multipart passlib[bcrypt] itsdangerous reportlab
+   Optional: pip install stripe qrcode[pil]
+4) Set Secrets (Environment Variables):
+   - APP_SECRET = a long random string
+   - BASE_URL = your public domain or replit URL (https://....)
+   - STRIPE_SECRET_KEY = (optional)
+   - STRIPE_WEBHOOK_SECRET = (optional)
+5) Click Run
+
+Default admin: first user you register becomes admin automatically.
+"""
+
+import os, re, time, json, hmac, base64, hashlib, secrets, sqlite3, datetime
+from typing import Optional, Dict, Any, List
+
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+
+from passlib.context import CryptContext
+from itsdangerous import URLSafeSerializer
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+
+# Optional deps (graceful)
+try:
+    import stripe  # type: ignore
+except Exception:
+    stripe = None
+
+try:
+    import qrcode  # type: ignore
+except Exception:
+    qrcode = None
+
+APP_SECRET = os.getenv("APP_SECRET", "dev-secret-change-me")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+DB_PATH = os.getenv("DB_PATH", "probid_allinone.db")
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+signer = URLSafeSerializer(APP_SECRET, salt="session")
+
+app = FastAPI(title="ProBid AI - All-in-One Money Machine")
+
+# -----------------------------
+# DB
+# -----------------------------
+def db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = db()
+    cur = conn.cursor()
+    cur.executescript("""
+    PRAGMA journal_mode=WAL;
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      is_admin INTEGER NOT NULL DEFAULT 0,
+
+      plan TEXT NOT NULL DEFAULT 'free',
+      stripe_customer_id TEXT,
+      stripe_subscription_id TEXT,
+
+      affiliate_code TEXT UNIQUE,
+      referred_by_code TEXT,
+      referred_by_user_id INTEGER,
+
+      commission_rate REAL NOT NULL DEFAULT 0.20,
+      payout_method TEXT DEFAULT 'manual',
+      payout_handle TEXT DEFAULT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS affiliate_clicks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      affiliate_code TEXT NOT NULL,
+      ip TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS referrals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referrer_user_id INTEGER NOT NULL,
+      referred_user_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'signed_up', -- signed_up, subscribed, cancelled
+      created_at TEXT NOT NULL,
+      UNIQUE(referrer_user_id, referred_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS affiliate_earnings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      affiliate_user_id INTEGER NOT NULL,
+      referred_user_id INTEGER NOT NULL,
+      stripe_invoice_id TEXT,
+      amount_cents INTEGER NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'usd',
+      status TEXT NOT NULL DEFAULT 'pending', -- pending, paid, void
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS estimates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      service TEXT NOT NULL,
+      state TEXT NOT NULL,
+      description TEXT NOT NULL,
+      amount_low_cents INTEGER NOT NULL,
+      amount_high_cents INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS seo_pages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS content_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL, -- tiktok, ytshorts, linkedin, reddit, fb, blog
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued', -- queued, posted, failed
+      created_at TEXT NOT NULL
+    );
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def now_iso() -> str:
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+def money(cents: int) -> str:
+    return f"${cents/100:,.2f}"
+
+def slugify(s: str) -> str:
+    s = s.lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s
+
+def get_user_from_cookie(req: Request) -> Optional[sqlite3.Row]:
+    token = req.cookies.get("session")
+    if not token:
+        return None
+    try:
+        data = signer.loads(token)
+        uid = int(data.get("uid"))
+    except Exception:
+        return None
+    conn = db()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    conn.close()
+    return user
+
+def require_user(req: Request) -> sqlite3.Row:
+    u = get_user_from_cookie(req)
+    if not u:
+        raise HTTPException(status_code=401, detail="Please log in.")
+    return u
+
+def require_admin(req: Request) -> sqlite3.Row:
+    u = require_user(req)
+    if int(u["is_admin"]) != 1:
+        raise HTTPException(status_code=403, detail="Admin only.")
+    return u
+
+def ensure_affiliate_code(user_id: int) -> str:
+    conn = db()
+    u = conn.execute("SELECT affiliate_code FROM users WHERE id = ?", (user_id,)).fetchone()
+    if u and u["affiliate_code"]:
+        conn.close()
+        return u["affiliate_code"]
+    # generate unique code
+    for _ in range(20):
+        code = "PB" + secrets.token_hex(4).upper()
+        try:
+            conn.execute("UPDATE users SET affiliate_code = ? WHERE id = ?", (code, user_id))
+            conn.commit()
+            conn.close()
+            return code
+        except sqlite3.IntegrityError:
+            continue
+    conn.close()
+    raise RuntimeError("Could not generate affiliate code.")
+
+def first_user_becomes_admin() -> bool:
+    conn = db()
+    count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+    conn.close()
+    return count == 0
+
+def set_session(resp: Response, user_id: int):
+    token = signer.dumps({"uid": user_id, "ts": int(time.time())})
+    resp.set_cookie("session", token, httponly=True, samesite="lax", secure=BASE_URL.startswith("https://"))
+
+def clear_session(resp: Response):
+    resp.delete_cookie("session")
+
+# -----------------------------
+# Pricing / Plans
+# -----------------------------
+PLANS = {
+    "free":  {"name":"Free", "price_cents":0,     "daily_estimates":1,  "pdf":False, "watermark":True},
+    "pro":   {"name":"Pro",  "price_cents":2900,  "daily_estimates":999,"pdf":True,  "watermark":False},
+    "biz":   {"name":"Business","price_cents":7900,"daily_estimates":999,"pdf":True, "watermark":False},
+    "proplus":{"name":"Pro+","price_cents":14900, "daily_estimates":999,"pdf":True,  "watermark":False},
+}
+
+DEFAULT_COMMISSION = float(os.getenv("DEFAULT_COMMISSION", "0.20"))  # 0.20 = 20%
+
+# -----------------------------
+# SEO Factory presets
+# -----------------------------
+STATES = [
+    ("illinois","Illinois"), ("wisconsin","Wisconsin"), ("iowa","Iowa"), ("minnesota","Minnesota"),
+    ("missouri","Missouri"), ("indiana","Indiana"), ("michigan","Michigan"), ("ohio","Ohio"),
+    ("texas","Texas"), ("florida","Florida"), ("california","California"), ("new-york","New York")
+]
+SERVICES = [
+    ("retaining-wall","Retaining wall"),
+    ("chimney-rebuild","Chimney rebuild"),
+    ("tuckpointing","Tuckpointing"),
+    ("concrete-patio","Concrete patio"),
+    ("roof-repair","Roof repair"),
+    ("siding-repair","Siding repair"),
+    ("bath-remodel","Bathroom remodel"),
+    ("kitchen-remodel","Kitchen remodel"),
+]
+
+def seed_seo_pages_if_empty(limit: int = 80):
+    conn = db()
+    existing = conn.execute("SELECT COUNT(*) AS c FROM seo_pages").fetchone()["c"]
+    if existing > 0:
+        conn.close()
+        return
+    created = 0
+    for sslug, sname in SERVICES:
+        for stslug, stname in STATES:
+            slug = f"estimate-{sslug}-cost-{stslug}"
+            title = f"{sname} Cost in {stname} (2025 Pricing Guide + Free Estimate)"
+            content = f"""
+            <p>Wondering the typical <b>{sname.lower()}</b> cost in <b>{stname}</b>?</p>
+            <p>Prices vary by size, access, materials, and local labor rates. ProBid AI generates a professional estimate in minutes.</p>
+            <ul>
+              <li>Fast: photo + description → estimate</li>
+              <li>Professional PDF</li>
+              <li>Regional pricing adjustment</li>
+            </ul>
+            <p><a class="btn" href="/signup?ref=SEO_{stslug.upper()}">Get 3 Free Estimates</a></p>
+            """
+            try:
+                conn.execute(
+                    "INSERT INTO seo_pages (slug, title, content, created_at) VALUES (?,?,?,?)",
+                    (slug, title, content, now_iso())
+                )
+                created += 1
+            except sqlite3.IntegrityError:
+                pass
+            if created >= limit:
+                conn.commit(); conn.close(); return
+    conn.commit()
+    conn.close()
+
+seed_seo_pages_if_empty()
+
+# -----------------------------
+# Templates (inline, single-file)
+# -----------------------------
+def layout(title: str, body: str, user: Optional[sqlite3.Row]=None) -> str:
+    nav = f"""
+    <div class="nav">
+      <div><a href="/">ProBid AI</a></div>
+      <div class="navlinks">
+        <a href="/pricing">Pricing</a>
+        <a href="/seo">Estimate Guides</a>
+        {"<a href='/app'>Dashboard</a> <a href='/logout'>Logout</a>" if user else "<a href='/login'>Login</a> <a class='btn' href='/signup'>Get Started Free</a>"}
+      </div>
+    </div>
+    """
+    css = """
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#0b0f17;color:#e8eefc;}
+      a{color:#b7c7ff;text-decoration:none}
+      .wrap{max-width:1050px;margin:0 auto;padding:22px;}
+      .nav{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;position:sticky;top:0;background:rgba(11,15,23,.92);backdrop-filter:blur(10px);border-bottom:1px solid rgba(255,255,255,.07)}
+      .nav a{margin-left:14px}
+      .btn{display:inline-block;background:#3b82f6;color:white;padding:10px 14px;border-radius:12px;font-weight:700}
+      .card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:18px;margin:14px 0}
+      .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+      input,select,textarea{width:100%;padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.25);color:#e8eefc}
+      .muted{color:rgba(232,238,252,.75)}
+      .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(59,130,246,.18);border:1px solid rgba(59,130,246,.35);margin-right:8px}
+      .danger{background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)}
+      table{width:100%;border-collapse:collapse}
+      th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+      h1,h2,h3{margin:0 0 10px}
+      .hero{padding:28px 0}
+      .big{font-size:42px;line-height:1.05;margin:10px 0 12px}
+      .sub{font-size:18px;color:rgba(232,238,252,.80)}
+      .kpis{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+      .kpis .pill{background:rgba(34,197,94,.16);border:1px solid rgba(34,197,94,.30)}
+      .footer{padding:28px 0;color:rgba(232,238,252,.60)}
+    </style>
+    """
+    return f"""<!doctype html>
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>{title}</title>{css}</head>
+    <body>{nav}<div class="wrap">{body}<div class="footer">© {datetime.datetime.utcnow().year} ProBid AI • Built by Jesse Kirchner</div></div></body></html>"""
+
+# -----------------------------
+# Viral PDF + Estimate
+# -----------------------------
+def make_estimate_pdf_bytes(
+    estimate_id: int,
+    service: str,
+    state: str,
+    description: str,
+    low_cents: int,
+    high_cents: int,
+    referral_url: str,
+    watermark: bool
+) -> bytes:
+    import io
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    w, h = letter
+
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(50, h-60, "ProBid AI Estimate")
+    c.setFont("Helvetica", 11)
+    c.drawString(50, h-85, f"Estimate ID: {estimate_id}")
+    c.drawString(50, h-105, f"Service: {service}   |   State: {state}")
+    c.drawString(50, h-125, f"Range: {money(low_cents)}  –  {money(high_cents)}")
+
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, h-165, "Scope / Notes")
+    c.setFont("Helvetica", 11)
+
+    y = h-185
+    for line in wrap_text(description, 92):
+        c.drawString(50, y, line)
+        y -= 14
+        if y < 120:
+            c.showPage()
+            y = h-60
+
+    # Viral footer
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(50, 90, "Generated by ProBid AI • Get 3 free estimates:")
+    c.setFont("Helvetica", 10)
+    c.drawString(50, 74, referral_url)
+
+    # Optional QR
+    if qrcode:
+        try:
+            img = qrcode.make(referral_url)
+            import io
+            img_buf = io.BytesIO()
+            img.save(img_buf, format="PNG")
+            img_buf.seek(0)
+            from reportlab.lib.utils import ImageReader
+            c.drawImage(ImageReader(img_buf), w-150, 55, width=85, height=85, mask='auto')
+        except Exception:
+            pass
+
+    # Watermark for free plan
+    if watermark:
+        c.saveState()
+        c.setFont("Helvetica-Bold", 48)
+        c.setFillGray(0.85, 0.18)
+        c.translate(70, 240)
+        c.rotate(35)
+        c.drawString(0, 0, "PROBID AI FREE")
+        c.restoreState()
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+def wrap_text(text: str, width: int) -> List[str]:
+    words = text.split()
+    lines, cur = [], []
+    count = 0
+    for w in words:
+        if count + len(w) + (1 if cur else 0) > width:
+            lines.append(" ".join(cur))
+            cur = [w]
+            count = len(w)
+        else:
+            cur.append(w)
+            count += len(w) + (1 if cur else 0)
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+# -----------------------------
+# Stripe (optional)
+# -----------------------------
+def stripe_ready() -> bool:
+    return (stripe is not None) and bool(STRIPE_SECRET_KEY)
+
+def stripe_init():
+    if stripe_ready():
+        stripe.api_key = STRIPE_SECRET_KEY
+
+stripe_init()
+
+# -----------------------------
+# Routes
+# -----------------------------
+@app.get("/", response_class=HTMLResponse)
+def home(req: Request):
+    user = get_user_from_cookie(req)
+    body = f"""
+    <div class="hero">
+      <div class="pill">AI Estimating</div><div class="pill">Viral Referrals</div><div class="pill">Affiliate Payouts</div>
+      <div class="big">Win more jobs with professional estimates in minutes.</div>
+      <div class="sub">Upload details → get a price range → export a branded PDF estimate that markets ProBid AI for you.</div>
+      <div style="margin-top:14px">
+        <a class="btn" href="/signup">Get 3 Free Estimates</a>
+        <a style="margin-left:12px" href="/pricing">See pricing</a>
+      </div>
+      <div class="kpis">
+        <span class="pill">Stop underbidding</span>
+        <span class="pill">Look professional instantly</span>
+        <span class="pill">Send estimates faster</span>
+        <span class="pill">Compete nationwide</span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Viral PDF</h3>
+        <div class="muted">Every estimate includes a referral link + QR so your customers bring you more users.</div>
+      </div>
+      <div class="card">
+        <h3>Affiliate Engine</h3>
+        <div class="muted">20–30% recurring commissions with admin payout export.</div>
+      </div>
+      <div class="card">
+        <h3>SEO Pages</h3>
+        <div class="muted">Auto-generated pricing guides that rank and funnel into signup.</div>
+      </div>
+      <div class="card">
+        <h3>Mobile-ready</h3>
+        <div class="muted">Backend supports mobile app (Expo/React Native) next.</div>
+      </div>
+    </div>
+    """
+    return layout("ProBid AI", body, user)
+
+@app.get("/pricing", response_class=HTMLResponse)
+def pricing(req: Request):
+    user = get_user_from_cookie(req)
+    cards = []
+    for key, p in PLANS.items():
+        price = "Free" if p["price_cents"] == 0 else f"{money(p['price_cents'])}/mo"
+        feat = []
+        if key == "free":
+            feat = ["1 estimate/day", "Watermarked", "No PDF export", "Referral unlocks more"]
+        elif key == "pro":
+            feat = ["Unlimited estimates", "PDF export", "Save history", "Email estimates"]
+        elif key == "biz":
+            feat = ["Custom branding", "Profit margin suggestions", "Job tracking", "Priority AI"]
+        else:
+            feat = ["CRM-lite", "Automated follow-ups", "Win-rate analytics", "API access (soon)"]
+        button = f"<a class='btn' href='/signup'>Start Free</a>" if p["price_cents"] == 0 else f"<a class='btn' href='/checkout?plan={key}'>Subscribe</a>"
+        cards.append(f"""
+        <div class="card">
+          <h3>{p['name']}</h3>
+          <div class="muted" style="margin:6px 0 10px;font-size:20px">{price}</div>
+          <ul>{"".join(f"<li>{x}</li>" for x in feat)}</ul>
+          <div style="margin-top:10px">{button}</div>
+        </div>
+        """)
+    body = f"""
+    <h1>Pricing</h1>
+    <div class="muted">Upgrade anytime. Affiliates earn recurring commissions.</div>
+    <div class="grid">{''.join(cards)}</div>
+    """
+    return layout("Pricing • ProBid AI", body, user)
+
+@app.get("/seo", response_class=HTMLResponse)
+def seo_index(req: Request):
+    user = get_user_from_cookie(req)
+    conn = db()
+    rows = conn.execute("SELECT slug,title FROM seo_pages ORDER BY id DESC LIMIT 60").fetchall()
+    conn.close()
+    body = "<h1>Estimate Cost Guides</h1><div class='muted'>SEO pages that funnel into ProBid AI.</div><div class='card'><ul>"
+    for r in rows:
+        body += f"<li><a href='/guide/{r['slug']}'>{r['title']}</a></li>"
+    body += "</ul></div>"
+    return layout("Guides • ProBid AI", body, user)
+
+@app.get("/guide/{slug}", response_class=HTMLResponse)
+def seo_page(req: Request, slug: str):
+    user = get_user_from_cookie(req)
+    conn = db()
+    row = conn.execute("SELECT * FROM seo_pages WHERE slug = ?", (slug,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Not found")
+    body = f"""
+    <h1>{row['title']}</h1>
+    <div class="card">{row['content']}</div>
+    <div class="card">
+      <h3>Get an instant estimate</h3>
+      <div class="muted">Upload your job details and get a professional range in minutes.</div>
+      <div style="margin-top:10px"><a class="btn" href="/signup?ref=SEO_{slug.upper()}">Get 3 Free Estimates</a></div>
+    </div>
+    """
+    return layout(row["title"], body, user)
+
+@app.get("/signup", response_class=HTMLResponse)
+def signup_page(req: Request, ref: Optional[str] = None):
+    user = get_user_from_cookie(req)
+    ref_note = f"<div class='pill'>Referral: {ref}</div>" if ref else ""
+    body = f"""
+    <h1>Create account</h1>
+    {ref_note}
+    <div class="card">
+      <form method="post" action="/signup">
+        <input type="hidden" name="ref" value="{ref or ''}">
+        <label>Email</label><input name="email" required>
+        <div style="height:10px"></div>
+        <label>Password</label><input name="password" type="password" required>
+        <div style="height:12px"></div>
+        <button class="btn" type="submit">Create Account</button>
+      </form>
+      <div class="muted" style="margin-top:10px">Already have an account? <a href="/login">Login</a></div>
+    </div>
+    """
+    return layout("Sign up • ProBid AI", body, user)
+
+@app.post("/signup")
+def signup(req: Request, email: str = Form(...), password: str = Form(...), ref: str = Form("")):
+    email = email.strip().lower()
+    if len(password) < 6:
+        raise HTTPException(400, "Password too short.")
+    conn = db()
+    is_admin = 1 if first_user_becomes_admin() else 0
+    ph = pwd.hash(password)
+    try:
+        conn.execute(
+            "INSERT INTO users (email,password_hash,created_at,is_admin,commission_rate,referred_by_code) VALUES (?,?,?,?,?,?)",
+            (email, ph, now_iso(), is_admin, DEFAULT_COMMISSION, (ref.strip() or None))
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(400, "Email already exists.")
+    user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+
+    # If referral code exists, attribute referral
+    if user and user["referred_by_code"]:
+        ref_code = user["referred_by_code"]
+        referrer = conn.execute("SELECT * FROM users WHERE affiliate_code = ?", (ref_code,)).fetchone()
+        if referrer:
+            conn.execute("UPDATE users SET referred_by_user_id = ? WHERE id = ?", (referrer["id"], user["id"]))
+            try:
+                conn.execute(
+                    "INSERT INTO referrals (referrer_user_id,referred_user_id,status,created_at) VALUES (?,?,?,?)",
+                    (referrer["id"], user["id"], "signed_up", now_iso())
+                )
+            except sqlite3.IntegrityError:
+                pass
+            conn.commit()
+    conn.close()
+
+    resp = RedirectResponse("/app", status_code=302)
+    set_session(resp, user["id"])
+    return resp
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(req: Request):
+    user = get_user_from_cookie(req)
+    body = """
+    <h1>Login</h1>
+    <div class="card">
+      <form method="post" action="/login">
+        <label>Email</label><input name="email" required>
+        <div style="height:10px"></div>
+        <label>Password</label><input name="password" type="password" required>
+        <div style="height:12px"></div>
+        <button class="btn" type="submit">Login</button>
+      </form>
+    </div>
+    """
+    return layout("Login • ProBid AI", body, user)
+
+@app.post("/login")
+def login(email: str = Form(...), password: str = Form(...)):
+    email = email.strip().lower()
+    conn = db()
+    user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    if not user or not pwd.verify(password, user["password_hash"]):
+        raise HTTPException(401, "Invalid credentials.")
+    resp = RedirectResponse("/app", status_code=302)
+    set_session(resp, user["id"])
+    return resp
+
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse("/", status_code=302)
+    clear_session(resp)
+    return resp
+
+@app.get("/r/{code}")
+def referral_redirect(req: Request, code: str):
+    # Track click then redirect to signup with ref code
+    conn = db()
+    conn.execute(
+        "INSERT INTO affiliate_clicks (affiliate_code,ip,user_agent,created_at) VALUES (?,?,?,?)",
+        (code, req.client.host if req.client else None, req.headers.get("user-agent"), now_iso())
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(f"/signup?ref={code}", status_code=302)
+
+@app.get("/app", response_class=HTMLResponse)
+def dashboard(req: Request):
+    user = require_user(req)
+    conn = db()
+    code = ensure_affiliate_code(user["id"])
+    plan = user["plan"]
+    plan_info = PLANS.get(plan, PLANS["free"])
+    referral_url = f"{BASE_URL}/r/{code}"
+
+    # Stats
+    clicks = conn.execute("SELECT COUNT(*) AS c FROM affiliate_clicks WHERE affiliate_code = ?", (code,)).fetchone()["c"]
+    refs = conn.execute("SELECT COUNT(*) AS c FROM referrals WHERE referrer_user_id = ?", (user["id"],)).fetchone()["c"]
+    pending_cents = conn.execute(
+        "SELECT COALESCE(SUM(amount_cents),0) AS s FROM affiliate_earnings WHERE affiliate_user_id=? AND status='pending'",
+        (user["id"],)
+    ).fetchone()["s"]
+    paid_cents = conn.execute(
+        "SELECT COALESCE(SUM(amount_cents),0) AS s FROM affiliate_earnings WHERE affiliate_user_id=? AND status='paid'",
+        (user["id"],)
+    ).fetchone()["s"]
+
+    ests = conn.execute(
+        "SELECT * FROM estimates WHERE user_id=? ORDER BY id DESC LIMIT 10",
+        (user["id"],)
+    ).fetchall()
+
+    conn.close()
+
+    body = f"""
+    <h1>Dashboard</h1>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Your plan</h3>
+        <div><span class="pill">{plan_info['name']}</span> <span class="muted">{'PDF enabled' if plan_info['pdf'] else 'PDF locked (upgrade)'} </span></div>
+        <div class="muted" style="margin-top:8px">Stop underbidding. Send estimates faster. Win more jobs.</div>
+        <div style="margin-top:10px"><a class="btn" href="/pricing">Upgrade</a></div>
+      </div>
+
+      <div class="card">
+        <h3>Affiliate link</h3>
+        <div class="muted">Share this link. Earn recurring commissions.</div>
+        <div style="margin-top:10px"><input value="{referral_url}" readonly></div>
+        <div class="muted" style="margin-top:10px">Clicks: <b>{clicks}</b> • Referrals: <b>{refs}</b></div>
+        <div class="muted">Pending: <b>{money(pending_cents)}</b> • Paid: <b>{money(paid_cents)}</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Create an estimate</h3>
+      <form method="post" action="/estimate">
+        <div class="grid">
+          <div>
+            <label>Service</label>
+            <select name="service">
+              {''.join(f"<option value='{name}'>{name}</option>" for _, name in SERVICES)}
+            </select>
+          </div>
+          <div>
+            <label>State</label>
+            <select name="state">
+              {''.join(f"<option value='{stname}'>{stname}</option>" for _, stname in STATES)}
+            </select>
+          </div>
+        </div>
+        <div style="height:10px"></div>
+        <label>Description</label>
+        <textarea name="description" rows="4" placeholder="Example: 25ft long retaining wall, 4ft high, block with stone cap, tight access..." required></textarea>
+        <div style="height:12px"></div>
+        <button class="btn" type="submit">Generate Estimate</button>
+      </form>
+      <div class="muted" style="margin-top:10px">Tip: free plan PDFs are watermarked. Upgrade for clean PDFs.</div>
+    </div>
+
+    <div class="card">
+      <h3>Recent estimates</h3>
+      <table>
+        <tr><th>ID</th><th>Service</th><th>State</th><th>Range</th><th>PDF</th></tr>
+        {''.join(f"<tr><td>{e['id']}</td><td>{e['service']}</td><td>{e['state']}</td><td>{money(e['amount_low_cents'])} – {money(e['amount_high_cents'])}</td><td><a href='/estimate/{e['id']}/pdf'>Download</a></td></tr>" for e in ests) or "<tr><td colspan='5' class='muted'>No estimates yet.</td></tr>"}
+      </table>
+    </div>
+
+    {"<div class='card'><h3>Admin</h3><a class='btn' href='/admin'>Open admin dashboard</a></div>" if int(user["is_admin"])==1 else ""}
+    """
+    return layout("Dashboard • ProBid AI", body, user)
+
+def simple_pricing_engine(service: str, state: str, description: str) -> (int,int):
+    """
+    Placeholder pricing engine.
+    Replace later with your AI + regional pricing model.
+    """
+    base = 120000  # $1,200.00
+    s = service.lower()
+    if "retaining" in s: base = 350000
+    if "chimney" in s: base = 420000
+    if "tuckpoint" in s: base = 180000
+    if "concrete" in s: base = 260000
+    if "kitchen" in s: base = 800000
+    if "bath" in s: base = 650000
+    # State multiplier (very rough)
+    st = state.lower()
+    mult = 1.0
+    if st in ("california","new york"): mult = 1.35
+    if st in ("texas","florida"): mult = 1.15
+    if st in ("iowa","wisconsin","illinois","missouri","indiana","michigan","ohio","minnesota"): mult = 1.0
+    base = int(base * mult)
+
+    # Description length nudges size complexity
+    complexity = min(len(description) / 400, 1.0)
+    low = int(base * (0.85 + 0.10*complexity))
+    high = int(base * (1.20 + 0.25*complexity))
+    return low, high
+
+@app.post("/estimate")
+def create_estimate(req: Request, service: str = Form(...), state: str = Form(...), description: str = Form(...)):
+    user = require_user(req)
+    low, high = simple_pricing_engine(service, state, description)
+    conn = db()
+    conn.execute(
+        "INSERT INTO estimates (user_id,service,state,description,amount_low_cents,amount_high_cents,created_at) VALUES (?,?,?,?,?,?,?)",
+        (user["id"], service, state, description, low, high, now_iso())
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/app", status_code=302)
+
+@app.get("/estimate/{estimate_id}/pdf")
+def estimate_pdf(req: Request, estimate_id: int):
+    user = require_user(req)
+    conn = db()
+    e = conn.execute("SELECT * FROM estimates WHERE id=? AND user_id=?", (estimate_id, user["id"])).fetchone()
+    conn.close()
+    if not e:
+        raise HTTPException(404, "Estimate not found")
+
+    code = ensure_affiliate_code(user["id"])
+    referral_url = f"{BASE_URL}/r/{code}"
+    plan_info = PLANS.get(user["plan"], PLANS["free"])
+    watermark = bool(plan_info["watermark"])
+
+    pdf_bytes = make_estimate_pdf_bytes(
+        estimate_id=e["id"],
+        service=e["service"],
+        state=e["state"],
+        description=e["description"],
+        low_cents=e["amount_low_cents"],
+        high_cents=e["amount_high_cents"],
+        referral_url=referral_url,
+        watermark=watermark
+    )
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=probid_estimate_{estimate_id}.pdf"}
+    )
+
+# -----------------------------
+# Stripe Checkout (optional)
+# -----------------------------
+@app.get("/checkout")
+def checkout(req: Request, plan: str):
+    user = require_user(req)
+    if plan not in PLANS or plan == "free":
+        return RedirectResponse("/pricing", status_code=302)
+
+    if not stripe_ready():
+        # fallback: manual upgrade via admin for dev
+        return HTMLResponse(layout("Stripe not configured",
+            f"<h1>Stripe not configured</h1><div class='card'><div class='muted'>Set STRIPE_SECRET_KEY to enable checkout.</div></div>",
+            user), status_code=200)
+
+    stripe_init()
+
+    # You should replace these with real Stripe Price IDs in production.
+    # For convenience, this creates a one-time Checkout Session using "price_data" (recurring).
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        success_url=f"{BASE_URL}/app?paid=1",
+        cancel_url=f"{BASE_URL}/pricing",
+        customer_email=user["email"],
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "product_data": {"name": f"ProBid AI {PLANS[plan]['name']}"},
+                "recurring": {"interval": "month"},
+                "unit_amount": PLANS[plan]["price_cents"],
+            },
+            "quantity": 1,
+        }],
+        metadata={
+            "user_id": str(user["id"]),
+            "plan": plan
+        }
+    )
+    return RedirectResponse(session.url, status_code=303)
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(req: Request):
+    if not stripe_ready():
+        raise HTTPException(400, "Stripe not configured")
+    stripe_init()
+
+    payload = await req.body()
+    sig = req.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        raise HTTPException(400, f"Webhook error: {str(e)}")
+
+    etype = event["type"]
+    obj = event["data"]["object"]
+
+    # Handle subscription created/updated
+    if etype in ("checkout.session.completed",):
+        meta = obj.get("metadata") or {}
+        user_id = int(meta.get("user_id", "0") or "0")
+        plan = meta.get("plan")
+        if user_id and plan in PLANS:
+            conn = db()
+            # Save customer/subscription IDs if present
+            cust = obj.get("customer")
+            sub = obj.get("subscription")
+            conn.execute(
+                "UPDATE users SET plan=?, stripe_customer_id=?, stripe_subscription_id=? WHERE id=?",
+                (plan, cust, sub, user_id)
+            )
+            conn.commit()
+            conn.close()
+
+            # Mark referral as subscribed if user was referred
+            conn = db()
+            u = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            if u and u["referred_by_user_id"]:
+                conn.execute(
+                    "UPDATE referrals SET status='subscribed' WHERE referrer_user_id=? AND referred_user_id=?",
+                    (u["referred_by_user_id"], user_id)
+                )
+                conn.commit()
+            conn.close()
+
+    # Handle invoice paid → create affiliate earnings (recurring commissions)
+    if etype in ("invoice.paid",):
+        invoice_id = obj.get("id")
+        customer_id = obj.get("customer")
+        amount_paid = int(obj.get("amount_paid") or 0)
+        currency = (obj.get("currency") or "usd").lower()
+
+        conn = db()
+        # Find user by customer id
+        u = conn.execute("SELECT * FROM users WHERE stripe_customer_id=?", (customer_id,)).fetchone()
+        if u and u["referred_by_user_id"]:
+            affiliate_id = int(u["referred_by_user_id"])
+            aff = conn.execute("SELECT * FROM users WHERE id=?", (affiliate_id,)).fetchone()
+            rate = float(aff["commission_rate"]) if aff else DEFAULT_COMMISSION
+            commission = int(round(amount_paid * rate))
+
+            # Prevent duplicates for same invoice
+            exists = conn.execute(
+                "SELECT 1 FROM affiliate_earnings WHERE stripe_invoice_id=? AND affiliate_user_id=?",
+                (invoice_id, affiliate_id)
+            ).fetchone()
+
+            if not exists and commission > 0:
+                conn.execute(
+                    "INSERT INTO affiliate_earnings (affiliate_user_id,referred_user_id,stripe_invoice_id,amount_cents,currency,status,created_at) VALUES (?,?,?,?,?,?,?)",
+                    (affiliate_id, int(u["id"]), invoice_id, commission, currency, "pending", now_iso())
+                )
+        conn.commit()
+        conn.close()
+
+    return PlainTextResponse("ok", status_code=200)
+
+# -----------------------------
+# Admin
+# -----------------------------
+@app.get("/admin", response_class=HTMLResponse)
+def admin(req: Request):
+    user = require_admin(req)
+    conn = db()
+    users = conn.execute("SELECT id,email,plan,is_admin,affiliate_code,referred_by_user_id,commission_rate FROM users ORDER BY id DESC LIMIT 200").fetchall()
+    refs = conn.execute("""
+      SELECT r.created_at, u1.email AS referrer, u2.email AS referred, r.status
+      FROM referrals r
+      JOIN users u1 ON u1.id=r.referrer_user_id
+      JOIN users u2 ON u2.id=r.referred_user_id
+      ORDER BY r.id DESC LIMIT 200
+    """).fetchall()
+    earns = conn.execute("""
+      SELECT e.created_at, u1.email AS affiliate, u2.email AS referred, e.amount_cents, e.currency, e.status, e.stripe_invoice_id
+      FROM affiliate_earnings e
+      JOIN users u1 ON u1.id=e.affiliate_user_id
+      JOIN users u2 ON u2.id=e.referred_user_id
+      ORDER BY e.id DESC LIMIT 200
+    """).fetchall()
+    conn.close()
+
+    body = f"""
+    <h1>Admin</h1>
+    <div class="grid">
+      <div class="card">
+        <h3>Quick actions</h3>
+        <div class="muted">Export pending payouts as CSV, mark as paid after sending money.</div>
+        <div style="margin-top:10px">
+          <a class="btn" href="/admin/payouts.csv">Download pending payouts CSV</a>
+          <a style="margin-left:10px" class="btn danger" href="/admin/mark_paid">Mark all pending as paid</a>
+        </div>
+        <div class="muted" style="margin-top:10px">Dev shortcut: manually set a user's plan.</div>
+        <form method="post" action="/admin/set_plan" style="margin-top:10px">
+          <div class="grid">
+            <div><label>User ID</label><input name="user_id" required></div>
+            <div><label>Plan</label>
+              <select name="plan">
+                {''.join(f"<option value='{k}'>{PLANS[k]['name']}</option>" for k in PLANS)}
+              </select>
+            </div>
+          </div>
+          <div style="height:10px"></div>
+          <button class="btn" type="submit">Set Plan</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>Automation</h3>
+        <div class="muted">Generate more SEO pages & queue content posts.</div>
+        <div style="margin-top:10px">
+          <a class="btn" href="/admin/seed_seo">Seed/refresh SEO pages</a>
+          <a style="margin-left:10px" class="btn" href="/admin/queue_content">Queue 30 content ideas</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Users</h3>
+      <table><tr><th>ID</th><th>Email</th><th>Plan</th><th>Admin</th><th>Affiliate</th><th>Referred by</th><th>Rate</th></tr>
+      {''.join(f"<tr><td>{u['id']}</td><td>{u['email']}</td><td>{u['plan']}</td><td>{u['is_admin']}</td><td>{u['affiliate_code'] or ''}</td><td>{u['referred_by_user_id'] or ''}</td><td>{int(float(u['commission_rate'])*100)}%</td></tr>" for u in users)}
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Referrals</h3>
+      <table><tr><th>Created</th><th>Referrer</th><th>Referred</th><th>Status</th></tr>
+      {''.join(f"<tr><td>{r['created_at']}</td><td>{r['referrer']}</td><td>{r['referred']}</td><td>{r['status']}</td></tr>" for r in refs)}
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Earnings</h3>
+      <table><tr><th>Created</th><th>Affiliate</th><th>Referred</th><th>Amount</th><th>Status</th><th>Invoice</th></tr>
+      {''.join(f"<tr><td>{e['created_at']}</td><td>{e['affiliate']}</td><td>{e['referred']}</td><td>{money(e['amount_cents'])}</td><td>{e['status']}</td><td>{e['stripe_invoice_id'] or ''}</td></tr>" for e in earns)}
+      </table>
+    </div>
+    """
+    return layout("Admin • ProBid AI", body, user)
+
+@app.post("/admin/set_plan")
+def admin_set_plan(req: Request, user_id: int = Form(...), plan: str = Form(...)):
+    require_admin(req)
+    if plan not in PLANS:
+        raise HTTPException(400, "Invalid plan")
+    conn = db()
+    conn.execute("UPDATE users SET plan=? WHERE id=?", (plan, user_id))
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/payouts.csv")
+def admin_payouts_csv(req: Request):
+    require_admin(req)
+    conn = db()
+    rows = conn.execute("""
+      SELECT u.email AS affiliate_email,
+             u.payout_method,
+             u.payout_handle,
+             SUM(e.amount_cents) AS total_cents
+      FROM affiliate_earnings e
+      JOIN users u ON u.id=e.affiliate_user_id
+      WHERE e.status='pending'
+      GROUP BY e.affiliate_user_id
+      HAVING total_cents > 0
+      ORDER BY total_cents DESC
+    """).fetchall()
+    conn.close()
+
+    lines = ["affiliate_email,payout_method,payout_handle,total_usd"]
+    for r in rows:
+        lines.append(f"{r['affiliate_email']},{r['payout_method']},{r['payout_handle'] or ''},{r['total_cents']/100:.2f}")
+    csv = "\n".join(lines)
+    return Response(content=csv, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=pending_payouts.csv"})
+
+@app.get("/admin/mark_paid")
+def admin_mark_paid(req: Request):
+    require_admin(req)
+    conn = db()
+    conn.execute("UPDATE affiliate_earnings SET status='paid' WHERE status='pending'")
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/seed_seo")
+def admin_seed_seo(req: Request):
+    require_admin(req)
+    seed_seo_pages_if_empty(limit=200)
+    return RedirectResponse("/seo", status_code=302)
+
+@app.get("/admin/queue_content")
+def admin_queue_content(req: Request):
+    require_admin(req)
+    conn = db()
+    ideas = []
+    for sslug, sname in SERVICES:
+        for stslug, stname in STATES:
+            ideas.append((
+                "blog",
+                f"{sname} cost in {stname}: real pricing + free estimate",
+                f"Stop guessing. ProBid AI generates a professional estimate fast. Try free: {BASE_URL}/signup"
+            ))
+    random_sample = ideas[:30]
+    for kind, title, body in random_sample:
+        conn.execute("INSERT INTO content_queue (kind,title,body,status,created_at) VALUES (?,?,?,?,?)",
+                     (kind, title, body, "queued", now_iso()))
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/admin", status_code=302)
+
+# -----------------------------
+# Health
+# -----------------------------
+@app.get("/health")
+def health():
+    return {"ok": True, "time": now_iso(), "stripe_ready": stripe_ready(), "base_url": BASE_URL}
+
+# -----------------------------
+# Uvicorn entrypoint for Replit
+# -----------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+```0

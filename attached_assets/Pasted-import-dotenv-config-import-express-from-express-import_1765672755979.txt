@@ -1,0 +1,824 @@
+import "dotenv/config";
+import express from "express";
+import cookieSession from "cookie-session";
+import Stripe from "stripe";
+import Database from "better-sqlite3";
+import crypto from "crypto";
+
+const app = express();
+
+// --- Config ---
+const APP_URL = mustEnv("APP_URL");
+const SESSION_SECRET = mustEnv("SESSION_SECRET");
+const STRIPE_SECRET_KEY = mustEnv("STRIPE_SECRET_KEY");
+const STRIPE_WEBHOOK_SECRET = mustEnv("STRIPE_WEBHOOK_SECRET");
+const PRICE_PRO = mustEnv("STRIPE_PRICE_PRO_MONTHLY");
+const PRICE_BIZ = mustEnv("STRIPE_PRICE_BUSINESS_MONTHLY");
+
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
+
+// IMPORTANT: webhook needs raw body, so mount it BEFORE json parser for that route only.
+app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
+
+// normal parsers for everything else
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+// session cookies
+app.use(
+  cookieSession({
+    name: "probid_session",
+    secret: SESSION_SECRET,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true, // Replit runs https
+    maxAge: 1000 * 60 * 60 * 24 * 30
+  })
+);
+
+const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
+
+// --- DB (SQLite, cheapest) ---
+const db = new Database("probid.db");
+db.pragma("journal_mode = WAL");
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stripe_customers (
+  user_id TEXT PRIMARY KEY,
+  stripe_customer_id TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  price_id TEXT,
+  current_period_end INTEGER,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS usage (
+  user_id TEXT NOT NULL,
+  day_key TEXT NOT NULL,
+  estimates_count INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, day_key),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_day ON usage(day_key);
+`);
+
+// --- Helpers ---
+function mustEnv(k: string) {
+  const v = process.env[k];
+  if (!v) throw new Error(`Missing required env var: ${k}`);
+  return v;
+}
+
+function now() {
+  return Date.now();
+}
+
+function dayKey(ts = Date.now()) {
+  const d = new Date(ts);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+type SessionData = {
+  uid?: string;
+  email?: string;
+};
+declare module "cookie-session" {
+  interface CookieSessionObject extends SessionData {}
+}
+
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!req.session?.uid) return res.redirect("/login");
+  next();
+}
+
+function getUser(uid: string) {
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(uid) as any | undefined;
+}
+
+function getSub(uid: string) {
+  return db.prepare("SELECT * FROM subscriptions WHERE user_id = ?").get(uid) as any | undefined;
+}
+
+function isPaidActive(sub: any | undefined) {
+  if (!sub) return false;
+  return sub.status === "active" || sub.status === "trialing";
+}
+
+function getDailyUsage(uid: string) {
+  const dk = dayKey();
+  const row = db
+    .prepare("SELECT estimates_count FROM usage WHERE user_id = ? AND day_key = ?")
+    .get(uid, dk) as any | undefined;
+  return row?.estimates_count ?? 0;
+}
+
+function incrementUsage(uid: string) {
+  const dk = dayKey();
+  const existing = db
+    .prepare("SELECT estimates_count FROM usage WHERE user_id = ? AND day_key = ?")
+    .get(uid, dk) as any | undefined;
+
+  if (!existing) {
+    db.prepare("INSERT INTO usage (user_id, day_key, estimates_count, updated_at) VALUES (?, ?, ?, ?)")
+      .run(uid, dk, 1, now());
+    return 1;
+  } else {
+    const next = (existing.estimates_count ?? 0) + 1;
+    db.prepare("UPDATE usage SET estimates_count = ?, updated_at = ? WHERE user_id = ? AND day_key = ?")
+      .run(next, now(), uid, dk);
+    return next;
+  }
+}
+
+// --- Paywall rules ---
+const FREE_ESTIMATES_PER_DAY = 2; // free preview limit (tune)
+function enforcePaywall(uid: string) {
+  const sub = getSub(uid);
+  if (isPaidActive(sub)) return { ok: true, tier: sub.price_id || "paid" };
+
+  const used = getDailyUsage(uid);
+  if (used >= FREE_ESTIMATES_PER_DAY) {
+    return { ok: false, reason: "limit_reached", used };
+  }
+  return { ok: true, tier: "free", used };
+}
+
+// --- Pages ---
+app.get("/", (req, res) => {
+  const uid = req.session?.uid;
+  const sub = uid ? getSub(uid) : undefined;
+  const paid = isPaidActive(sub);
+
+  res.type("html").send(`
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ProBid AI — Instant Construction Estimates</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;background:#0b0f19;color:#eaf0ff}
+    .wrap{max-width:980px;margin:0 auto;padding:28px}
+    .card{background:#121a2a;border:1px solid #22304d;border-radius:16px;padding:18px;margin:14px 0}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .btn{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#0b0f19;background:#eaf0ff;font-weight:700}
+    .btn2{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#eaf0ff;background:#1a2740;border:1px solid #2a3a5e;font-weight:700}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#1a2740;border:1px solid #2a3a5e;font-size:12px}
+    .muted{color:#b8c4e6}
+    input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2a3a5e;background:#0b0f19;color:#eaf0ff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="justify-content:space-between;align-items:center;">
+      <div>
+        <h1 style="margin:0;">ProBid AI</h1>
+        <div class="muted">Instant estimates → convert leads → get paid.</div>
+      </div>
+      <div>
+        ${uid ? `<span class="pill">Logged in: ${escapeHtml(req.session?.email || "user")}</span>` : `<a class="btn2" href="/login">Login</a>`}
+        ${uid ? `<a class="btn2" href="/logout" style="margin-left:8px;">Logout</a>` : ``}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Try it now (Free Preview)</h2>
+      <div class="muted">You get ${FREE_ESTIMATES_PER_DAY}/day free. Paid plans unlock unlimited + saved jobs.</div>
+      <div style="margin-top:12px" class="row">
+        <a class="btn" href="${uid ? "/app" : "/login"}">${uid ? "Open App" : "Start Free"}</a>
+        <a class="btn2" href="/pricing">Pricing</a>
+        ${uid && paid ? `<a class="btn2" href="/billing">Manage Billing</a>` : ``}
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">What you get</h3>
+      <ul class="muted">
+        <li>Fast ballpark estimates for common job types</li>
+        <li>Lead capture built-in (email + job details)</li>
+        <li>Stripe paywall that actually enforces access</li>
+        <li>Cheapest infrastructure: Node + SQLite on Replit</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="muted">Owner: Jesse Kirchner</div>
+    </div>
+  </div>
+</body>
+</html>
+  `);
+});
+
+app.get("/pricing", (req, res) => {
+  res.type("html").send(`
+<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pricing — ProBid AI</title>
+<style>
+  body{font-family:system-ui,Arial;margin:0;background:#0b0f19;color:#eaf0ff}
+  .wrap{max-width:980px;margin:0 auto;padding:28px}
+  .card{background:#121a2a;border:1px solid #22304d;border-radius:16px;padding:18px;margin:14px 0}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#0b0f19;background:#eaf0ff;font-weight:800}
+  .btn2{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#eaf0ff;background:#1a2740;border:1px solid #2a3a5e;font-weight:800}
+  .muted{color:#b8c4e6}
+</style>
+</head><body>
+<div class="wrap">
+  <a class="btn2" href="/">← Back</a>
+  <h1>Pricing</h1>
+  <div class="row">
+    <div class="card" style="flex:1;min-width:240px;">
+      <h2>Free Preview</h2>
+      <div class="muted">2 estimates/day</div>
+      <ul class="muted">
+        <li>Basic estimate output</li>
+        <li>No saved jobs</li>
+        <li>No exports</li>
+      </ul>
+      <a class="btn" href="/login">Start Free</a>
+    </div>
+
+    <div class="card" style="flex:1;min-width:240px;">
+      <h2>Pro</h2>
+      <div class="muted">$25/month</div>
+      <ul class="muted">
+        <li>Unlimited estimates</li>
+        <li>Save jobs + history</li>
+        <li>Priority responses</li>
+      </ul>
+      <a class="btn" href="/checkout?plan=pro">Go Pro</a>
+    </div>
+
+    <div class="card" style="flex:1;min-width:240px;">
+      <h2>Business</h2>
+      <div class="muted">$55/month</div>
+      <ul class="muted">
+        <li>Unlimited estimates</li>
+        <li>Team-ready workflow</li>
+        <li>Priority support</li>
+      </ul>
+      <a class="btn" href="/checkout?plan=business">Go Business</a>
+    </div>
+  </div>
+</div>
+</body></html>
+  `);
+});
+
+app.get("/login", (req, res) => {
+  res.type("html").send(`
+<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Login — ProBid AI</title>
+<style>
+  body{font-family:system-ui,Arial;margin:0;background:#0b0f19;color:#eaf0ff}
+  .wrap{max-width:520px;margin:0 auto;padding:28px}
+  .card{background:#121a2a;border:1px solid #22304d;border-radius:16px;padding:18px;margin:14px 0}
+  .btn{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#0b0f19;background:#eaf0ff;font-weight:800;border:0;cursor:pointer}
+  input{width:100%;padding:10px;border-radius:10px;border:1px solid #2a3a5e;background:#0b0f19;color:#eaf0ff}
+  .muted{color:#b8c4e6}
+</style>
+</head><body>
+<div class="wrap">
+  <a class="btn" href="/" style="background:#1a2740;color:#eaf0ff;border:1px solid #2a3a5e;">← Back</a>
+  <h1>Login</h1>
+  <div class="card">
+    <form method="POST" action="/login">
+      <label class="muted">Email</label><br/>
+      <input name="email" type="email" placeholder="you@company.com" required/>
+      <div style="height:12px"></div>
+      <button class="btn" type="submit">Continue</button>
+      <div class="muted" style="margin-top:10px;font-size:12px;">
+        No password. We create a local account tied to your browser session (fastest conversion for MVP).
+      </div>
+    </form>
+  </div>
+</div>
+</body></html>
+  `);
+});
+
+app.post("/login", (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) return res.status(400).send("Invalid email");
+
+  // upsert user
+  let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any | undefined;
+  if (!user) {
+    const uid = crypto.randomUUID();
+    db.prepare("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)").run(uid, email, now());
+    user = { id: uid, email };
+  }
+
+  req.session.uid = user.id;
+  req.session.email = user.email;
+  return res.redirect("/app");
+});
+
+app.get("/logout", (req, res) => {
+  req.session = null;
+  res.redirect("/");
+});
+
+// --- App (Gated) ---
+app.get("/app", requireAuth, (req, res) => {
+  const uid = req.session.uid!;
+  const sub = getSub(uid);
+  const paid = isPaidActive(sub);
+  const used = getDailyUsage(uid);
+  const remaining = Math.max(0, FREE_ESTIMATES_PER_DAY - used);
+
+  res.type("html").send(`
+<!doctype html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>App — ProBid AI</title>
+<style>
+  body{font-family:system-ui,Arial;margin:0;background:#0b0f19;color:#eaf0ff}
+  .wrap{max-width:980px;margin:0 auto;padding:28px}
+  .card{background:#121a2a;border:1px solid #22304d;border-radius:16px;padding:18px;margin:14px 0}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#0b0f19;background:#eaf0ff;font-weight:800;border:0;cursor:pointer}
+  .btn2{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#eaf0ff;background:#1a2740;border:1px solid #2a3a5e;font-weight:800}
+  .muted{color:#b8c4e6}
+  input,textarea,select{width:100%;padding:10px;border-radius:10px;border:1px solid #2a3a5e;background:#0b0f19;color:#eaf0ff}
+  pre{white-space:pre-wrap;background:#0b0f19;border:1px solid #2a3a5e;border-radius:12px;padding:12px}
+  .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#1a2740;border:1px solid #2a3a5e;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;align-items:center;">
+    <div>
+      <h1 style="margin:0;">ProBid AI App</h1>
+      <div class="muted">Logged in as ${escapeHtml(req.session.email || "")}</div>
+    </div>
+    <div class="row">
+      <a class="btn2" href="/">Home</a>
+      <a class="btn2" href="/pricing">Pricing</a>
+      ${paid ? `<span class="pill">PAID ACTIVE</span><a class="btn2" href="/billing">Billing</a>` : `<span class="pill">FREE PREVIEW</span>`}
+      <a class="btn2" href="/logout">Logout</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">Usage</h2>
+    ${paid
+      ? `<div class="muted">Unlimited estimates enabled.</div>`
+      : `<div class="muted">Free estimates used today: <b>${used}</b> / ${FREE_ESTIMATES_PER_DAY} (remaining: ${remaining})</div>
+         <div style="margin-top:10px" class="row">
+            <a class="btn" href="/checkout?plan=pro">Upgrade to Pro</a>
+            <a class="btn2" href="/checkout?plan=business">Upgrade to Business</a>
+         </div>`
+    }
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">Generate Estimate</h2>
+    <form id="f">
+      <div class="row">
+        <div style="flex:1;min-width:240px;">
+          <label class="muted">Job Type</label>
+          <select name="jobType">
+            <option value="tuckpointing">Tuckpointing</option>
+            <option value="chimney_rebuild">Chimney Rebuild</option>
+            <option value="retaining_wall">Retaining Wall</option>
+            <option value="concrete_flatwork">Concrete Flatwork</option>
+            <option value="roof_repair">Roof Repair</option>
+            <option value="general">General Construction</option>
+          </select>
+        </div>
+        <div style="flex:1;min-width:240px;">
+          <label class="muted">Region / Market</label>
+          <select name="market">
+            <option value="midwest">Midwest (default)</option>
+            <option value="south">South</option>
+            <option value="west">West</option>
+            <option value="northeast">Northeast</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="height:10px"></div>
+      <label class="muted">Job Details (scope, dimensions, material, height, access)</label>
+      <textarea name="details" rows="6" placeholder="Example: 30 ft tuckpointing, 2-story, mortar match, includes setup & cleanup"></textarea>
+
+      <div style="height:10px"></div>
+      <div class="row">
+        <button class="btn" type="submit">Get Estimate</button>
+        <span class="muted" id="status"></span>
+      </div>
+    </form>
+
+    <div style="height:12px"></div>
+    <div id="out"></div>
+  </div>
+</div>
+
+<script>
+  const f = document.getElementById('f');
+  const out = document.getElementById('out');
+  const status = document.getElementById('status');
+
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status.textContent = "Running...";
+    out.innerHTML = "";
+
+    const form = new FormData(f);
+    const payload = Object.fromEntries(form.entries());
+
+    const r = await fetch('/estimate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+
+    const data = await r.json().catch(() => ({}));
+    status.textContent = "";
+
+    if (!r.ok) {
+      out.innerHTML = '<div class="card" style="border-color:#7a2d2d"><b>Blocked:</b> ' + (data?.message || 'Error') +
+        (data?.upgrade ? '<div style="margin-top:10px"><a class="btn" href="/checkout?plan=pro">Upgrade to Pro</a> <a class="btn2" href="/checkout?plan=business">Upgrade to Business</a></div>' : '') +
+        '</div>';
+      return;
+    }
+
+    out.innerHTML = '<pre>' + (data?.text || JSON.stringify(data,null,2)) + '</pre>';
+  });
+</script>
+</body></html>
+  `);
+});
+
+// --- Estimate API (Paywall enforced here) ---
+app.post("/estimate", requireAuth, (req, res) => {
+  const uid = req.session.uid!;
+  const gate = enforcePaywall(uid);
+  if (!gate.ok) {
+    return res.status(402).json({
+      message: "Free preview limit reached for today. Upgrade to unlock unlimited estimates.",
+      upgrade: true
+    });
+  }
+
+  // count usage for free users only (paid users can be metered later if you want)
+  const sub = getSub(uid);
+  const paid = isPaidActive(sub);
+  if (!paid) incrementUsage(uid);
+
+  const jobType = String(req.body.jobType || "general");
+  const market = String(req.body.market || "midwest");
+  const details = String(req.body.details || "");
+
+  const estimate = generateEstimate(jobType, market, details);
+
+  res.json({
+    ok: true,
+    tier: paid ? "paid" : "free",
+    text: estimate
+  });
+});
+
+// --- Checkout (Stripe) ---
+app.get("/checkout", requireAuth, async (req, res) => {
+  const uid = req.session.uid!;
+  const plan = String(req.query.plan || "pro");
+  const priceId = plan === "business" ? PRICE_BIZ : PRICE_PRO;
+
+  const email = req.session.email!;
+  const customerId = getOrCreateStripeCustomer(uid, email);
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    customer: customerId,
+    line_items: [{ price: priceId, quantity: 1 }],
+    allow_promotion_codes: true,
+    success_url: `${APP_URL}/success`,
+    cancel_url: `${APP_URL}/pricing`,
+    metadata: { user_id: uid }
+  });
+
+  res.redirect(303, session.url!);
+});
+
+app.get("/success", requireAuth, (req, res) => {
+  res.type("html").send(`
+<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Success — ProBid AI</title>
+<style>
+  body{font-family:system-ui,Arial;margin:0;background:#0b0f19;color:#eaf0ff}
+  .wrap{max-width:680px;margin:0 auto;padding:28px}
+  .card{background:#121a2a;border:1px solid #22304d;border-radius:16px;padding:18px;margin:14px 0}
+  .btn{display:inline-block;padding:12px 14px;border-radius:12px;text-decoration:none;color:#0b0f19;background:#eaf0ff;font-weight:800}
+  .muted{color:#b8c4e6}
+</style>
+</head><body>
+<div class="wrap">
+  <div class="card">
+    <h1 style="margin-top:0;">You’re in.</h1>
+    <div class="muted">If your subscription is active, ProBid AI is now unlocked. (Webhooks update status within seconds.)</div>
+    <div style="margin-top:12px">
+      <a class="btn" href="/app">Go to App</a>
+      <a class="btn" href="/billing" style="margin-left:10px;background:#1a2740;color:#eaf0ff;border:1px solid #2a3a5e;">Manage Billing</a>
+    </div>
+  </div>
+</div>
+</body></html>
+  `);
+});
+
+// --- Billing portal ---
+app.get("/billing", requireAuth, async (req, res) => {
+  const uid = req.session.uid!;
+  const email = req.session.email!;
+  const customerId = getOrCreateStripeCustomer(uid, email);
+
+  const portal = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    return_url: `${APP_URL}/app`
+  });
+
+  res.redirect(303, portal.url);
+});
+
+// --- Admin (simple) ---
+app.get("/admin", (req, res) => {
+  if (!ADMIN_KEY) return res.status(404).send("Not found");
+  if (req.query.key !== ADMIN_KEY) return res.status(401).send("Unauthorized");
+
+  const users = db.prepare("SELECT id,email,created_at FROM users ORDER BY created_at DESC LIMIT 50").all() as any[];
+  const subs = db.prepare("SELECT * FROM subscriptions ORDER BY updated_at DESC LIMIT 50").all() as any[];
+  res.json({ users, subs });
+});
+
+// --- Stripe webhook handler ---
+async function stripeWebhookHandler(req: express.Request, res: express.Response) {
+  let event: Stripe.Event;
+
+  try {
+    const sig = req.headers["stripe-signature"] as string;
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err: any) {
+    console.error("Webhook signature verification failed:", err?.message || err);
+    return res.status(400).send(`Webhook Error`);
+  }
+
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const uid = String((session.metadata as any)?.user_id || "");
+        const customer = String(session.customer || "");
+        if (uid && customer) upsertStripeCustomer(uid, customer);
+        break;
+      }
+
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted": {
+        const sub = event.data.object as Stripe.Subscription;
+        const customerId = String(sub.customer);
+
+        // map customer -> user_id
+        const row = db
+          .prepare("SELECT user_id FROM stripe_customers WHERE stripe_customer_id = ?")
+          .get(customerId) as any | undefined;
+
+        if (row?.user_id) {
+          const userId = row.user_id as string;
+          const status = sub.status;
+          const priceId = sub.items.data?.[0]?.price?.id || null;
+          const periodEnd = sub.current_period_end ? sub.current_period_end * 1000 : null;
+
+          db.prepare(`
+            INSERT INTO subscriptions (user_id, status, price_id, current_period_end, updated_at)
+            VALUES (@user_id, @status, @price_id, @current_period_end, @updated_at)
+            ON CONFLICT(user_id) DO UPDATE SET
+              status=excluded.status,
+              price_id=excluded.price_id,
+              current_period_end=excluded.current_period_end,
+              updated_at=excluded.updated_at
+          `).run({
+            user_id: userId,
+            status,
+            price_id: priceId,
+            current_period_end: periodEnd,
+            updated_at: now()
+          });
+        }
+        break;
+      }
+
+      default:
+        // ignore
+        break;
+    }
+
+    res.json({ received: true });
+  } catch (e) {
+    console.error("Webhook handling error:", e);
+    res.status(500).send("Webhook handler failed");
+  }
+}
+
+// --- Stripe customer helpers ---
+function getOrCreateStripeCustomer(uid: string, email: string) {
+  const row = db.prepare("SELECT stripe_customer_id FROM stripe_customers WHERE user_id = ?").get(uid) as any | undefined;
+  if (row?.stripe_customer_id) return row.stripe_customer_id as string;
+
+  // create customer
+  // NOTE: keeping this sync-ish by using a blocking pattern is fine for MVP; Stripe call is async in route.
+  // Here we just return placeholder and ensure created in route; but simpler: create in route via helper is async.
+  // We'll do a small hack: store a "pending" customer on first checkout by creating it in the route.
+  // So this function should only be used from async routes where we can actually create it.
+  throw new Error("Stripe customer missing (call createStripeCustomer in async route)");
+}
+
+function upsertStripeCustomer(uid: string, customerId: string) {
+  db.prepare(`
+    INSERT INTO stripe_customers (user_id, stripe_customer_id)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET stripe_customer_id=excluded.stripe_customer_id
+  `).run(uid, customerId);
+}
+
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
+
+// --- Estimate engine (real, deterministic MVP) ---
+// This is NOT “AI” yet, but it produces usable real-world estimates without external APIs.
+// You can later swap in AI behind the same function with zero paywall changes.
+function generateEstimate(jobType: string, market: string, details: string) {
+  const marketMult: Record<string, number> = {
+    midwest: 1.0,
+    south: 0.95,
+    west: 1.2,
+    northeast: 1.25
+  };
+
+  const m = marketMult[market] ?? 1.0;
+
+  // Base assumptions (tune these to match your real margins)
+  const laborRate = 85 * m;   // $/hr blended crew
+  const overheadMult = 1.22;  // overhead + small tools
+  const profitMult = 1.18;    // profit target
+
+  // Try to extract rough size numbers from text
+  const nums = Array.from(details.matchAll(/(\d+(\.\d+)?)/g)).map(x => Number(x[1])).filter(n => Number.isFinite(n));
+  const sizeHint = nums.length ? Math.max(...nums) : 0;
+
+  let laborHours = 10;
+  let material = 350 * m;
+
+  switch (jobType) {
+    case "tuckpointing":
+      laborHours = clamp(12 + sizeHint * 0.5, 10, 80);
+      material = 250 * m + sizeHint * 6 * m;
+      break;
+
+    case "chimney_rebuild":
+      laborHours = 28 + (sizeHint > 10 ? 12 : 0);
+      material = 900 * m + (sizeHint > 0 ? sizeHint * 15 * m : 0);
+      break;
+
+    case "retaining_wall":
+      laborHours = clamp(20 + sizeHint * 0.8, 18, 120);
+      material = 1100 * m + sizeHint * 18 * m;
+      break;
+
+    case "concrete_flatwork":
+      laborHours = clamp(14 + sizeHint * 0.25, 12, 90);
+      material = 800 * m + sizeHint * 8 * m;
+      break;
+
+    case "roof_repair":
+      laborHours = clamp(10 + sizeHint * 0.35, 8, 60);
+      material = 450 * m + sizeHint * 10 * m;
+      break;
+
+    default:
+      laborHours = clamp(12 + sizeHint * 0.3, 10, 90);
+      material = 500 * m + sizeHint * 7 * m;
+      break;
+  }
+
+  const labor = laborHours * laborRate;
+  const subtotal = (labor + material) * overheadMult;
+  const total = subtotal * profitMult;
+
+  const low = total * 0.9;
+  const high = total * 1.15;
+
+  return [
+    `ESTIMATE (MVP Engine)`,
+    `Job Type: ${jobType}`,
+    `Market: ${market} (multiplier ${m.toFixed(2)})`,
+    ``,
+    `Assumptions:`,
+    `- Blended labor rate: $${laborRate.toFixed(0)}/hr`,
+    `- Estimated labor hours: ${laborHours.toFixed(1)} hrs`,
+    `- Materials & disposals: $${material.toFixed(0)}`,
+    `- Overhead multiplier: ${overheadMult.toFixed(2)}`,
+    `- Profit multiplier: ${profitMult.toFixed(2)}`,
+    ``,
+    `Breakdown:`,
+    `- Labor: $${labor.toFixed(0)}`,
+    `- Materials: $${material.toFixed(0)}`,
+    `- Subtotal (w/ overhead): $${subtotal.toFixed(0)}`,
+    ``,
+    `Recommended Bid Range: $${low.toFixed(0)} – $${high.toFixed(0)}`,
+    ``,
+    `Notes:`,
+    `- This is a deterministic MVP estimator (fast + consistent).`,
+    `- Replace with AI-based estimator later without changing paywall or billing.`,
+  ].join("\n");
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+// --- Fix for first-time stripe customer creation ---
+async function createStripeCustomer(email: string) {
+  const c = await stripe.customers.create({ email });
+  return c.id;
+}
+
+// patch getOrCreateStripeCustomer usage for async routes
+function getStripeCustomerIdOrNull(uid: string) {
+  const row = db.prepare("SELECT stripe_customer_id FROM stripe_customers WHERE user_id = ?").get(uid) as any | undefined;
+  return row?.stripe_customer_id ? String(row.stripe_customer_id) : null;
+}
+
+// override checkout route logic to create customer if missing
+app._router.stack = app._router.stack; // no-op to keep TS happy
+
+// --- Start ---
+const port = Number(process.env.PORT || 3000);
+app.listen(port, () => {
+  console.log(`✅ ProBid AI locked server running on port ${port}`);
+  console.log(`APP_URL=${APP_URL}`);
+});
+
+// --- Small override: ensure checkout/billing can create customer if missing ---
+app.get("/checkout", requireAuth, async (req, res) => {
+  const uid = req.session.uid!;
+  const plan = String(req.query.plan || "pro");
+  const priceId = plan === "business" ? PRICE_BIZ : PRICE_PRO;
+
+  const email = req.session.email!;
+  let customerId = getStripeCustomerIdOrNull(uid);
+  if (!customerId) {
+    customerId = await createStripeCustomer(email);
+    upsertStripeCustomer(uid, customerId);
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    customer: customerId,
+    line_items: [{ price: priceId, quantity: 1 }],
+    allow_promotion_codes: true,
+    success_url: `${APP_URL}/success`,
+    cancel_url: `${APP_URL}/pricing`,
+    metadata: { user_id: uid }
+  });
+
+  res.redirect(303, session.url!);
+});
+
+app.get("/billing", requireAuth, async (req, res) => {
+  const uid = req.session.uid!;
+  const email = req.session.email!;
+  let customerId = getStripeCustomerIdOrNull(uid);
+  if (!customerId) {
+    customerId = await createStripeCustomer(email);
+    upsertStripeCustomer(uid, customerId);
+  }
+
+  const portal = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    return_url: `${APP_URL}/app`
+  });
+
+  res.redirect(303, portal.url);
+});
