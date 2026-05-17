@@ -1,1 +1,79 @@
+name: Mobile Build (EAS)
 
+# Manual trigger only — EAS builds consume your monthly build credits, so we
+# don't auto-build on every push. Run this from the Actions tab when you're
+# ready to ship.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "android"
+        type: choice
+        options:
+          - android
+          - ios
+          - all
+      submit:
+        description: "Also submit to the store after build?"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    name: EAS build (${{ inputs.platform }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Verify EXPO_TOKEN is configured
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN secret is not set. Add it under Settings → Secrets → Actions."
+            exit 1
+          fi
+
+      - name: Setup EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install mobile deps
+        working-directory: mobile
+        run: npm ci
+
+      - name: Run deploy-mobile.sh (audit + validate + build)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: ./scripts/deploy-mobile.sh ${{ inputs.platform }}
+
+      - name: Submit to store
+        if: ${{ inputs.submit }}
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          case "${{ inputs.platform }}" in
+            android) eas submit --platform android --non-interactive --latest ;;
+            ios)     eas submit --platform ios     --non-interactive --latest ;;
+            all)
+              eas submit --platform android --non-interactive --latest
+              eas submit --platform ios     --non-interactive --latest
+              ;;
+          esac
