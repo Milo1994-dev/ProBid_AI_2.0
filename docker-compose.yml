@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: probid-postgres
+    environment:
+      POSTGRES_DB: probid_dev
+      POSTGRES_USER: probid_user
+      POSTGRES_PASSWORD: probid_password_dev_only
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations/0001_add_database_indexes.sql:/docker-entrypoint-initdb.d/01_indexes.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U probid_user -d probid_dev']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - probid-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: probid-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - probid-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: probid-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://probid_user:probid_password_dev_only@postgres:5432/probid_dev
+      REDIS_URL: redis://redis:6379/0
+      SESSION_SECRET: dev-session-secret-min-32-characters-long!
+      CSRF_SECRET: dev-csrf-secret-min-32-characters-long!
+      HEAD_SECRET: dev-head-secret-min-32-characters-long!
+      NODE_ENV: development
+      PORT: '5000'
+    ports:
+      - '5000:5000'
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - probid-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  probid-network:
+    driver: bridge

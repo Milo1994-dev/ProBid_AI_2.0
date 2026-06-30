@@ -1,0 +1,94 @@
+name: CI (Tests, Lint, Security)
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        working-directory: ['.', './client', './mobile']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Run npm audit
+        working-directory: ${{ matrix.working-directory }}
+        run: npm audit --audit-level=high --production
+        continue-on-error: false
+
+  typecheck:
+    name: TypeScript Type Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        working-directory: ['.', './client', './mobile']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install dependencies
+        working-directory: ${{ matrix.working-directory }}
+        run: npm ci
+      - name: Run TypeScript check
+        working-directory: ${{ matrix.working-directory }}
+        run: npm run check
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: probid_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run test suite
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/probid_test
+          NODE_ENV: test
+          SESSION_SECRET: test-secret-key-32-chars-minimum
+        run: npm test
+
+  build:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run build
+        run: npm run build:all
